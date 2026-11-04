@@ -1,0 +1,840 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>企业知识库</title>
+<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; color: #262626; }
+  button { cursor: pointer; border: 1px solid #d9d9d9; background: #fff; border-radius: 6px; padding: 5px 12px; }
+  button.primary { background: #00b96b; border-color: #00b96b; color: #fff; }
+  button.danger { color: #ff4d4f; border-color: #ffccc7; }
+  input, textarea { border: 1px solid #d9d9d9; border-radius: 6px; padding: 8px; font: inherit; }
+  .hidden { display: none !important; }
+
+  /* 登录 */
+  #auth { display: flex; height: 100vh; align-items: center; justify-content: center; background: #f5f6f7; }
+  #auth .card { width: 340px; background: #fff; padding: 32px; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,.06); }
+  #auth input { width: 100%; margin-bottom: 12px; }
+  #auth button { width: 100%; margin-bottom: 8px; }
+
+  /* 主界面 */
+  #app { display: flex; height: 100vh; }
+  #sidebar { width: 280px; border-right: 1px solid #f0f0f0; background: #fafafa; display: flex; flex-direction: column; }
+  #sidebar header { padding: 16px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #f0f0f0; }
+  #tree { flex: 1; overflow: auto; padding: 8px; }
+  .node { display: flex; align-items: center; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+  .node:hover { background: #eee; }
+  .node.active { background: #e6f7ef; color: #00b96b; }
+  .node.drag-over { outline: 2px dashed #00b96b; outline-offset: -2px; }
+  .node .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .node .add { visibility: hidden; border: none; background: none; padding: 0 4px; color: #8c8c8c; }
+  .node:hover .add { visibility: visible; }
+  #sidebar footer { padding: 12px 16px; border-top: 1px solid #f0f0f0; font-size: 13px; color: #8c8c8c; display: flex; justify-content: space-between; }
+
+  #main { flex: 1; overflow: auto; }
+  .toolbar { position: sticky; top: 0; background: #fff; padding: 12px 32px; border-bottom: 1px solid #f0f0f0; display: flex; gap: 8px; align-items: center; }
+  .toolbar.with-avatar-gap { padding-top: 56px; }
+  .toolbar .meta { flex: 1; font-size: 13px; color: #8c8c8c; }
+  .doc { max-width: 860px; margin: 0 auto; padding: 32px; }
+  .doc h1.title { font-size: 30px; margin: 0 0 24px; }
+  .markdown { line-height: 1.75; }
+  .markdown pre { background: #f6f8fa; padding: 12px; border-radius: 6px; overflow: auto; }
+  .markdown code { background: #f6f8fa; padding: 2px 4px; border-radius: 4px; }
+  .markdown table { border-collapse: collapse; } .markdown td, .markdown th { border: 1px solid #e8e8e8; padding: 6px 12px; }
+  .markdown blockquote { margin: 0; padding-left: 12px; border-left: 4px solid #e8e8e8; color: #8c8c8c; }
+  .markdown img { max-width: 100%; height: auto; display: block; border-radius: 6px; }
+  .empty { color: #bfbfbf; text-align: center; margin-top: 30vh; }
+
+  .editor { display: flex; height: calc(100vh - 57px); }
+  .editor .left { flex: 1; display: flex; flex-direction: column; padding: 24px; gap: 12px; border-right: 1px solid #f0f0f0; }
+  .editor .left input { font-size: 22px; font-weight: 600; border: none; border-bottom: 1px solid #f0f0f0; border-radius: 0; outline: none; }
+  .editor .left textarea { flex: 1; resize: none; border: none; outline: none; font-family: Menlo, Consolas, monospace; font-size: 14px; line-height: 1.7; }
+  .editor .right { flex: 1; overflow: auto; padding: 24px; }
+  .fmt-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding-bottom: 8px; border-bottom: 1px solid #f0f0f0; }
+  .fmt-bar button { padding: 4px 10px; font-size: 13px; }
+  .fmt-bar select { border: 1px solid #d9d9d9; border-radius: 6px; padding: 4px 6px; font: inherit; font-size: 13px; }
+  .fmt-bar input[type=color] { width: 28px; height: 28px; padding: 2px; border: 1px solid #d9d9d9; border-radius: 6px; cursor: pointer; }
+  .list-menu { position: relative; display: inline-block; }
+  .list-menu-panel { position: absolute; top: 100%; left: 0; margin-top: 4px; background: #fff; border: 1px solid #d9d9d9; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,.12); padding: 4px; z-index: 60; min-width: 170px; }
+  .list-menu-item { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 13px; white-space: nowrap; }
+  .list-menu-item:hover { background: #f5f5f5; }
+  .list-menu-item .preview { font-family: Menlo, Consolas, monospace; color: #00b96b; }
+  .list-menu-item .label { color: #8c8c8c; }
+  #toast { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: #262626; color: #fff; padding: 8px 16px; border-radius: 6px; font-size: 14px; }
+
+  /* 用户主页入口 + 弹窗 */
+  #user-entry { position: fixed; top: 12px; right: 20px; z-index: 50; width: 36px; height: 36px; border-radius: 50%; background: #00b96b; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 600; cursor: pointer; user-select: none; box-shadow: 0 1px 4px rgba(0,0,0,.15); }
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; z-index: 100; }
+  .modal-card { width: 380px; background: #fff; border-radius: 12px; padding: 24px; box-shadow: 0 4px 24px rgba(0,0,0,.15); }
+  .modal-card h3 { margin: 0 0 16px; }
+  .modal-card .row { display: flex; padding: 8px 0; font-size: 14px; border-bottom: 1px solid #f5f5f5; }
+  .modal-card .row .label { width: 64px; color: #8c8c8c; flex-shrink: 0; }
+  .modal-card .row .value { flex: 1; word-break: break-all; }
+  .modal-card label { display: block; font-size: 13px; color: #8c8c8c; margin: 12px 0 4px; }
+  .modal-card input, .modal-card textarea, .modal-card select { width: 100%; }
+  .modal-card textarea { resize: vertical; min-height: 70px; }
+  .modal-card .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+  /* 权限管理 */
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; margin-left: 6px; }
+  .badge.type-read { background: #e6f4ff; color: #1677ff; }
+  .badge.type-write { background: #fff7e6; color: #d48806; }
+  .badge.type-admin { background: #fff0f6; color: #c41d7f; }
+  .badge.status-pending { background: #fafafa; color: #8c8c8c; border: 1px solid #d9d9d9; }
+  .badge.status-approved { background: #e6f7ef; color: #00b96b; }
+  .badge.status-rejected { background: #fff1f0; color: #ff4d4f; }
+  .badge.target-tag { background: #f0f5ff; color: #2f54eb; }
+  #perm-list, #my-perm-list { max-height: 360px; overflow: auto; margin: 8px 0; }
+  .perm-item { padding: 10px 0; border-bottom: 1px solid #f5f5f5; }
+  .perm-item:last-child { border-bottom: none; }
+  .perm-main { font-size: 14px; }
+  .perm-meta { font-size: 12px; color: #8c8c8c; margin-top: 2px; }
+  .perm-actions { margin-top: 6px; display: flex; gap: 8px; }
+  /* 知识库列表 */
+  .kb-item { padding: 10px 8px; border-radius: 6px; cursor: pointer; }
+  .kb-item:hover { background: #eee; }
+  .kb-item .kb-title { font-size: 14px; font-weight: 600; }
+  .kb-item .kb-desc { font-size: 12px; color: #8c8c8c; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .kb-item .kb-meta { font-size: 12px; color: #bfbfbf; margin-top: 2px; }
+  #sidebar-header.drag-over { background: #e6f7ef; }
+  #sidebar-header .back { border: none; background: none; padding: 0 4px 0 0; color: #8c8c8c; font-size: 16px; }
+</style>
+</head>
+<body>
+
+<!-- 登录 / 注册 -->
+<div id="auth">
+  <div class="card">
+    <h2 style="margin-top:0">企业知识库</h2>
+    <input id="username" placeholder="用户名（3-64 位英文字母/数字/_.-）">
+    <input id="password" type="password" placeholder="密码（至少 6 位）">
+    <button class="primary" onclick="login()">登录</button>
+    <button onclick="register()">注册并登录</button>
+  </div>
+</div>
+
+<!-- 主界面 -->
+<div id="app" class="hidden">
+  <aside id="sidebar">
+    <header id="sidebar-header"></header>
+    <div id="tree"></div>
+    <footer><span id="who"></span><a href="#" onclick="logout()">退出</a></footer>
+  </aside>
+  <main id="main"><div class="empty">选择左侧文档，或点击「新建」</div></main>
+  <div id="user-entry" title="个人主页" onclick="openProfile()"></div>
+</div>
+
+<div id="profile-overlay" class="modal-overlay hidden"></div>
+<div id="kb-overlay" class="modal-overlay hidden"></div>
+<div id="permission-overlay" class="modal-overlay hidden"></div>
+
+<div id="toast" class="hidden"></div>
+
+<script>
+let token = localStorage.getItem("kb_token");
+let me = null;
+let docs = [];          // 目录树数据（不含正文）
+let current = null;     // 当前打开的完整文档
+let editing = null;     // 编辑状态：{ id|null, parent_id, title, content, version }
+let pendingAvatarUrl = null; // 资料编辑中已上传但未保存的头像 URL
+
+// ---------- 通用 ----------
+async function uploadImage(file) {
+  const fd = new FormData();
+  fd.append("file", file);
+  const res = await fetch("/api/files/upload", {
+    method: "POST",
+    headers: token ? { Authorization: "Bearer " + token } : {},
+    body: fd,
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "上传失败");
+  return data; // { url, object_name }
+}
+async function api(path, options = {}) {
+  const res = await fetch(path, {
+    ...options,
+    headers: { "Content-Type": "application/json", ...(token ? { Authorization: "Bearer " + token } : {}) },
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+  if (res.status === 401 && token) { logout(); throw new Error("登录已过期"); }
+  if (res.status === 204) return null;
+  const data = await res.json();
+  if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "请求参数有误");
+  return data;
+}
+function toast(msg) {
+  const el = document.getElementById("toast");
+  el.textContent = msg; el.classList.remove("hidden");
+  clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.add("hidden"), 2500);
+}
+function esc(s) { return s.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+function renderMd(md) {
+  if (window.marked && window.DOMPurify) return DOMPurify.sanitize(marked.parse(md || ""));
+  return "<pre>" + esc(md || "") + "</pre>";  // CDN 加载失败时降级为纯文本
+}
+function fmt(t) { return t.replace("T", " ").slice(0, 16); }
+
+// ---------- 认证 ----------
+async function login() {
+  try {
+    const data = await api("/api/auth/login", { method: "POST", body: creds() });
+    token = data.access_token; localStorage.setItem("kb_token", token);
+    await enter();
+  } catch (e) { toast(e.message); }
+}
+async function register() {
+  try {
+    await api("/api/auth/register", { method: "POST", body: creds() });
+    await login();
+  } catch (e) { toast(e.message); }
+}
+function creds() { return { username: username.value.trim(), password: password.value }; }
+function logout() { token = null; localStorage.removeItem("kb_token"); location.reload(); }
+
+async function enter() {
+  me = await api("/api/auth/me");
+  document.getElementById("auth").classList.add("hidden");
+  document.getElementById("app").classList.remove("hidden");
+  document.getElementById("who").textContent = me.nickname + (me.role === "admin" ? "（管理员）" : "");
+  renderUserEntry();
+  await renderKbList();
+}
+function renderUserEntry() {
+  const el = document.getElementById("user-entry");
+  el.innerHTML = me.avatar_url
+    ? `<img src="${esc(me.avatar_url)}" style="width:100%;height:100%;border-radius:50%;object-fit:cover">`
+    : esc((me.nickname || "?").slice(0, 1).toUpperCase());
+}
+
+// ---------- 知识库 ----------
+let kbs = [];
+let currentKb = null; // 当前选中的知识库：{ id, title, description, created_at }
+
+async function renderKbList() {
+  currentKb = null; current = null; editing = null; docs = [];
+  kbs = await api("/api/knowledge-bases");
+  document.getElementById("sidebar-header").innerHTML =
+    `<strong>知识库</strong><button class="primary" onclick="openCreateKb()">+ 新建</button>`;
+  document.getElementById("tree").innerHTML = kbs.length
+    ? kbs.map(k => `
+      <div class="kb-item" onclick="openKnowledgeBase(${k.id})">
+        <div class="kb-title">📚 ${esc(k.title)}</div>
+        ${k.description ? `<div class="kb-desc">${esc(k.description)}</div>` : ""}
+        <div class="kb-meta">创建于 ${fmt(k.created_at)}</div>
+      </div>`).join("")
+    : '<div style="color:#bfbfbf;padding:8px">暂无知识库，点击上方「+ 新建」创建一个</div>';
+  document.getElementById("main").innerHTML = '<div class="empty">选择左侧知识库，或点击「新建」</div>';
+}
+
+async function openKnowledgeBase(kbId) {
+  currentKb = kbs.find(k => k.id === kbId) || await api("/api/knowledge-bases/" + kbId);
+  current = null; editing = null;
+  document.getElementById("sidebar-header").innerHTML = `
+    <button class="back" title="返回知识库列表" onclick="renderKbList()">←</button>
+    <strong style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(currentKb.title)}">${esc(currentKb.title)}</strong>
+    <button onclick="openPermissionModal('knowledge_base', currentKb.id, currentKb.title)">权限</button>
+    <button class="primary" onclick="newDoc(null)">+ 新建</button>`;
+  const header = document.getElementById("sidebar-header");
+  header.title = "拖拽文档到此处移到顶层";
+  header.ondragover = onRootDragOver;
+  header.ondragleave = onRootDragLeave;
+  header.ondrop = onRootDrop;
+  document.getElementById("main").innerHTML = '<div class="empty">选择左侧文档，或点击「新建」</div>';
+  await loadTree();
+}
+
+function openCreateKb() {
+  document.getElementById("kb-overlay").innerHTML = `
+    <div class="modal-card">
+      <h3>新建知识库</h3>
+      <label>标题</label>
+      <input id="kb-title" placeholder="请输入知识库标题">
+      <label>描述</label>
+      <textarea id="kb-desc" placeholder="简单描述一下这个知识库（可选）"></textarea>
+      <div class="actions">
+        <button onclick="closeCreateKb()">取消</button>
+        <button class="primary" onclick="submitCreateKb()">创建</button>
+      </div>
+    </div>`;
+  document.getElementById("kb-overlay").classList.remove("hidden");
+}
+function closeCreateKb() {
+  document.getElementById("kb-overlay").classList.add("hidden");
+}
+async function submitCreateKb() {
+  const title = document.getElementById("kb-title").value.trim();
+  const description = document.getElementById("kb-desc").value.trim();
+  if (!title) return toast("知识库标题不能为空");
+  try {
+    const kb = await api("/api/knowledge-bases", { method: "POST", body: { title, description: description || null } });
+    closeCreateKb();
+    toast("已创建");
+    kbs.unshift(kb);
+    await openKnowledgeBase(kb.id);
+  } catch (e) { toast(e.message); }
+}
+document.getElementById("kb-overlay").addEventListener("click", e => {
+  if (e.target.id === "kb-overlay") closeCreateKb();
+});
+
+// ---------- 目录树 ----------
+async function loadTree() {
+  docs = await api("/api/documents/tree?knowledge_base_id=" + currentKb.id);
+  const byParent = {};
+  docs.forEach(d => (byParent[d.parent_id ?? "root"] ||= []).push(d));
+  const build = (pid, depth) => (byParent[pid] || []).map(d => `
+    <div class="node ${current && current.id === d.id ? "active" : ""}" style="padding-left:${8 + depth * 16}px"
+         draggable="true" onclick="openDoc(${d.id})"
+         ondragstart="onNodeDragStart(event, ${d.id})"
+         ondragover="onNodeDragOver(event)"
+         ondragleave="onNodeDragLeave(event)"
+         ondrop="onNodeDrop(event, ${d.id})">
+      <span class="name">📄 ${esc(d.title)}</span>
+      <button class="add" title="新建子文档" onclick="event.stopPropagation(); newDoc(${d.id})">+</button>
+    </div>` + build(d.id, depth + 1)).join("");
+  document.getElementById("tree").innerHTML = build("root", 0) || '<div style="color:#bfbfbf;padding:8px">暂无文档</div>';
+}
+
+// ---------- 拖拽移动 ----------
+let dragDocId = null;
+function onNodeDragStart(e, id) {
+  dragDocId = id;
+  e.dataTransfer.effectAllowed = "move";
+  e.dataTransfer.setData("text/plain", String(id));
+}
+function onNodeDragOver(e) {
+  e.preventDefault();
+  e.currentTarget.classList.add("drag-over");
+}
+function onNodeDragLeave(e) {
+  e.currentTarget.classList.remove("drag-over");
+}
+async function onNodeDrop(e, targetId) {
+  e.preventDefault();
+  e.currentTarget.classList.remove("drag-over");
+  const id = dragDocId ?? Number(e.dataTransfer.getData("text/plain"));
+  dragDocId = null;
+  if (!id || id === targetId) return;
+  await moveDocTo(id, targetId);
+}
+function onRootDragOver(e) {
+  e.preventDefault();
+  document.getElementById("sidebar-header").classList.add("drag-over");
+}
+function onRootDragLeave(e) {
+  document.getElementById("sidebar-header").classList.remove("drag-over");
+}
+async function onRootDrop(e) {
+  e.preventDefault();
+  document.getElementById("sidebar-header").classList.remove("drag-over");
+  const id = dragDocId ?? Number(e.dataTransfer.getData("text/plain"));
+  dragDocId = null;
+  if (!id) return;
+  await moveDocTo(id, null);
+}
+async function moveDocTo(id, parentId) {
+  const doc = docs.find(d => d.id === id);
+  if (!doc) return;
+  if (doc.parent_id === parentId) return toast(parentId === null ? "已经是顶层文档" : "已经是该文档的子文档");
+  try {
+    await api("/api/documents/" + id, { method: "PUT", body: { parent_id: parentId, version: doc.version } });
+    toast("已移动");
+    if (current && current.id === id) await openDoc(id);
+    else await loadTree();
+  } catch (err) { toast(err.message); }
+}
+
+// ---------- 查看 ----------
+async function openDoc(id) {
+  if (editing && !confirm("当前编辑内容未保存，确定离开？")) return;
+  editing = null;
+  try { current = await api("/api/documents/" + id); } catch (e) { toast(e.message); return loadTree(); }
+  document.getElementById("user-entry").classList.remove("hidden");
+  const canDelete = current.creator_id === me.id || me.role === "admin";
+  document.getElementById("main").innerHTML = `
+    <div class="toolbar with-avatar-gap">
+      <span class="meta">${esc(current.updater?.nickname || "")} 更新于 ${fmt(current.updated_at)} · ${current.word_count} 字</span>
+      <button onclick="openPermissionModal('document', current.id, current.title)">权限</button>
+      <button class="primary" onclick="editDoc()">编辑</button>
+      ${canDelete ? '<button class="danger" onclick="deleteDoc()">删除</button>' : ""}
+    </div>
+    <article class="doc"><h1 class="title">${esc(current.title)}</h1><div class="markdown">${renderMd(current.content)}</div></article>`;
+  loadTree();
+}
+
+// ---------- 新建 / 编辑 ----------
+function newDoc(parentId) {
+  if (editing && !confirm("当前编辑内容未保存，确定离开？")) return;
+  editing = { id: null, parent_id: parentId, title: "", content: "", version: 0, knowledge_base_id: currentKb.id };
+  renderEditor();
+}
+function editDoc() {
+  editing = { id: current.id, parent_id: current.parent_id, title: current.title, content: current.content, version: current.version };
+  renderEditor();
+}
+function renderEditor() {
+  document.getElementById("user-entry").classList.add("hidden");
+  document.getElementById("main").innerHTML = `
+    <div class="toolbar">
+      <span class="meta">${editing.id ? "编辑文档" : "新建文档"} · 支持 Markdown，Ctrl+S 保存</span>
+      <button onclick="document.getElementById('doc-image-input').click()">插入图片</button>
+      <input type="file" id="doc-image-input" accept="image/*" class="hidden" onchange="onDocImageSelected(event)">
+      <button onclick="cancelEdit()">取消</button>
+      <button class="primary" onclick="saveDoc()">保存</button>
+    </div>
+    <div class="editor">
+      <div class="left">
+        <input id="ed-title" placeholder="请输入标题" value="${esc(editing.title)}">
+        <div class="fmt-bar">
+          <select title="标题级别" onchange="if (this.value !== '') { applyHeading(Number(this.value)); this.selectedIndex = 0; }">
+            <option value="">标题</option>
+            <option value="1">标题 1</option>
+            <option value="2">标题 2</option>
+            <option value="3">标题 3</option>
+            <option value="4">标题 4</option>
+            <option value="0">正文（清除标题）</option>
+          </select>
+          <button type="button" title="加粗" onclick="wrapSelection('**', '**')"><b>B</b></button>
+          <button type="button" title="斜体" onclick="wrapSelection('*', '*')"><i>I</i></button>
+          <button type="button" title="下划线" onclick="wrapSelection('&lt;u&gt;', '&lt;/u&gt;')"><u>U</u></button>
+          <div class="list-menu">
+            <button type="button" title="有序列表" onclick="toggleListMenu(event)">有序列表 ▾</button>
+            <div class="list-menu-panel hidden" id="list-menu-panel">
+              <div class="list-menu-item" onclick="applyNumberedList('decimal')"><span class="preview">1. 2. 3.</span><span class="label">阿拉伯数字</span></div>
+              <div class="list-menu-item" onclick="applyNumberedList('upper-alpha')"><span class="preview">A. B. C.</span><span class="label">大写字母</span></div>
+              <div class="list-menu-item" onclick="applyNumberedList('lower-alpha')"><span class="preview">a. b. c.</span><span class="label">小写字母</span></div>
+              <div class="list-menu-item" onclick="applyNumberedList('upper-roman')"><span class="preview">I. II. III.</span><span class="label">大写罗马</span></div>
+              <div class="list-menu-item" onclick="applyNumberedList('lower-roman')"><span class="preview">i. ii. iii.</span><span class="label">小写罗马</span></div>
+            </div>
+          </div>
+          <select title="字体" onchange="wrapSelectionStyle('font-family', this.value); this.selectedIndex = 0">
+            <option value="">字体</option>
+            <option value="'Microsoft YaHei', sans-serif">微软雅黑</option>
+            <option value="'PingFang SC', sans-serif">苹方</option>
+            <option value="'Times New Roman', serif">衬线</option>
+            <option value="Menlo, Consolas, monospace">等宽</option>
+          </select>
+          <select title="字号" onchange="wrapSelectionStyle('font-size', this.value); this.selectedIndex = 0">
+            <option value="">字号</option>
+            <option value="12px">小</option>
+            <option value="16px">标准</option>
+            <option value="20px">大</option>
+            <option value="28px">特大</option>
+          </select>
+          <input type="color" title="文字颜色" value="#262626" onchange="wrapSelectionStyle('color', this.value)">
+          <select title="行间距" onchange="applyLineHeight(this.value); this.selectedIndex = 0">
+            <option value="">行间距</option>
+            <option value="1.2">紧凑</option>
+            <option value="1.75">标准</option>
+            <option value="2.2">宽松</option>
+            <option value="2.6">加大</option>
+          </select>
+          <button type="button" title="对选中行按字母/数字排序" onclick="sortSelectedLines()">排序</button>
+        </div>
+        <textarea id="ed-content" placeholder="开始写作...">${esc(editing.content)}</textarea>
+      </div>
+      <div class="right markdown" id="ed-preview"></div>
+    </div>`;
+  const ta = document.getElementById("ed-content");
+  const sync = () => document.getElementById("ed-preview").innerHTML = renderMd(ta.value);
+  ta.addEventListener("input", sync); sync();
+  document.getElementById("ed-title").focus();
+}
+function wrapSelection(before, after) {
+  const ta = document.getElementById("ed-content");
+  const start = ta.selectionStart, end = ta.selectionEnd;
+  const selected = ta.value.slice(start, end) || "文本";
+  ta.value = ta.value.slice(0, start) + before + selected + after + ta.value.slice(end);
+  ta.dispatchEvent(new Event("input"));
+  ta.focus();
+  ta.selectionStart = start + before.length;
+  ta.selectionEnd = start + before.length + selected.length;
+}
+function wrapSelectionStyle(prop, value) {
+  if (!value) return;
+  wrapSelection(`<span style="${prop}: ${value}">`, "</span>");
+}
+function toggleListMenu(e) {
+  e.stopPropagation();
+  document.getElementById("list-menu-panel").classList.toggle("hidden");
+}
+function applyNumberedList(style) {
+  document.getElementById("list-menu-panel").classList.add("hidden");
+  const ta = document.getElementById("ed-content");
+  let start = ta.selectionStart, end = ta.selectionEnd;
+  start = ta.value.lastIndexOf("\n", start - 1) + 1;
+  let lineEnd = ta.value.indexOf("\n", end - 1);
+  if (lineEnd === -1) lineEnd = ta.value.length;
+
+  const lines = ta.value.slice(start, lineEnd).split("\n").filter(l => l.trim() !== "");
+  if (lines.length === 0) return toast("请先选中要转换为列表的内容");
+  const texts = lines.map(l => l.replace(/^\s*(?:[-*+]|\d+[.)]|<li>)\s*/, "").replace(/\s*<\/li>\s*$/, ""));
+
+  // 阿拉伯数字走标准 Markdown 有序列表语法；其余样式用 <ol style="list-style-type:...">
+  // 模拟 Google 文档的多种编号样式，Markdown 本身不支持这些记号
+  const block = style === "decimal"
+    ? texts.map((t, i) => `${i + 1}. ${t}`).join("\n")
+    : `<ol style="list-style-type: ${style}">\n${texts.map(t => `  <li>${t}</li>`).join("\n")}\n</ol>`;
+
+  ta.value = ta.value.slice(0, start) + block + ta.value.slice(lineEnd);
+  ta.dispatchEvent(new Event("input"));
+  ta.focus();
+  ta.selectionStart = start;
+  ta.selectionEnd = start + block.length;
+}
+function applyLineHeight(value) {
+  if (!value) return;
+  // span 默认不响应 line-height，display: inline-block 让它对包裹的文字生效，
+  // 同时仍是内联标签，markdown 内联解析（粗体等）不会因此被打断
+  wrapSelection(`<span style="line-height: ${value}; display: inline-block">`, "</span>");
+}
+function sortSelectedLines() {
+  const ta = document.getElementById("ed-content");
+  let start = ta.selectionStart, end = ta.selectionEnd;
+  if (start === end) return toast("请先选中要排序的多行内容");
+  start = ta.value.lastIndexOf("\n", start - 1) + 1;
+  let lineEnd = ta.value.indexOf("\n", end - 1);
+  if (lineEnd === -1) lineEnd = ta.value.length;
+
+  const lines = ta.value.slice(start, lineEnd).split("\n").filter(l => l.trim() !== "");
+  if (lines.length < 2) return toast("至少选中两行才能排序");
+
+  const bulletRe = /^(\s*)([-*+])\s+(.*)$/;
+  const orderedRe = /^(\s*)\d+[.)]\s+(.*)$/;
+  const parsed = lines.map(line => {
+    let m = line.match(bulletRe);
+    if (m) return { indent: m[1], marker: m[2], text: m[3] };
+    m = line.match(orderedRe);
+    if (m) return { indent: m[1], marker: "ordered", text: m[2] };
+    return { indent: "", marker: null, text: line };
+  });
+  parsed.sort((a, b) => a.text.localeCompare(b.text, "zh"));
+  const rebuilt = parsed
+    .map((p, i) => (p.marker === "ordered" ? `${p.indent}${i + 1}. ${p.text}` : p.marker ? `${p.indent}${p.marker} ${p.text}` : p.text))
+    .join("\n");
+
+  ta.value = ta.value.slice(0, start) + rebuilt + ta.value.slice(lineEnd);
+  ta.dispatchEvent(new Event("input"));
+  ta.focus();
+  ta.selectionStart = start;
+  ta.selectionEnd = start + rebuilt.length;
+}
+function applyHeading(level) {
+  const ta = document.getElementById("ed-content");
+  const value = ta.value;
+  const pos = ta.selectionStart;
+  const lineStart = value.lastIndexOf("\n", pos - 1) + 1;
+  let lineEnd = value.indexOf("\n", pos);
+  if (lineEnd === -1) lineEnd = value.length;
+  const stripped = value.slice(lineStart, lineEnd).replace(/^#{1,6}\s*/, "");
+  const newLine = (level ? "#".repeat(level) + " " : "") + stripped;
+  ta.value = value.slice(0, lineStart) + newLine + value.slice(lineEnd);
+  ta.dispatchEvent(new Event("input"));
+  ta.focus();
+  ta.selectionStart = ta.selectionEnd = lineStart + newLine.length;
+}
+async function onDocImageSelected(e) {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  try {
+    toast("上传中...");
+    const { url } = await uploadImage(file);
+    const ta = document.getElementById("ed-content");
+    const pos = ta.selectionStart ?? ta.value.length;
+    const snippet = `![](${url})`;
+    ta.value = ta.value.slice(0, pos) + snippet + ta.value.slice(pos);
+    ta.dispatchEvent(new Event("input"));
+    ta.focus();
+    ta.selectionStart = ta.selectionEnd = pos + snippet.length;
+    toast("图片已插入");
+  } catch (err) { toast(err.message); }
+}
+async function saveDoc() {
+  const title = document.getElementById("ed-title").value.trim();
+  const content = document.getElementById("ed-content").value;
+  if (!title) return toast("标题不能为空");
+  try {
+    const saved = editing.id
+      ? await api("/api/documents/" + editing.id, { method: "PUT", body: { title, content, version: editing.version } })
+      : await api("/api/documents", { method: "POST", body: { title, content, parent_id: editing.parent_id, knowledge_base_id: editing.knowledge_base_id } });
+    editing = null; toast("已保存");
+    await openDoc(saved.id);
+  } catch (e) { toast(e.message); }
+}
+function cancelEdit() {
+  const id = editing.id; editing = null;
+  if (id) openDoc(id);
+  else {
+    document.getElementById("user-entry").classList.remove("hidden");
+    document.getElementById("main").innerHTML = '<div class="empty">选择左侧文档，或点击「新建」</div>';
+  }
+}
+document.addEventListener("keydown", e => {
+  if (editing && (e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); saveDoc(); }
+});
+document.addEventListener("click", () => {
+  const panel = document.getElementById("list-menu-panel");
+  if (panel) panel.classList.add("hidden");
+});
+
+// ---------- 删除 ----------
+async function deleteDoc() {
+  if (!confirm(`确定删除「${current.title}」？其子文档也会一并删除。`)) return;
+  try {
+    await api("/api/documents/" + current.id, { method: "DELETE" });
+    current = null; toast("已删除");
+    document.getElementById("main").innerHTML = '<div class="empty">选择左侧文档，或点击「新建」</div>';
+    await loadTree();
+  } catch (e) { toast(e.message); }
+}
+
+// ---------- 权限管理 ----------
+const PERM_TYPE_LABEL = { read: "读权限", write: "写权限", admin: "管理权限" };
+const PERM_STATUS_LABEL = { pending: "审批中", approved: "已通过", rejected: "已拒绝" };
+const PERM_TARGET_LABEL = { knowledge_base: "知识库", document: "文档" };
+let permTarget = null; // 当前打开的权限管理目标：{ type, id, label }
+
+function openPermissionModal(targetType, targetId, label) {
+  permTarget = { type: targetType, id: targetId, label };
+  renderPermissionModal();
+  document.getElementById("permission-overlay").classList.remove("hidden");
+}
+function closePermissionModal() {
+  document.getElementById("permission-overlay").classList.add("hidden");
+}
+function renderPermissionModal() {
+  document.getElementById("permission-overlay").innerHTML = `
+    <div class="modal-card" style="width:520px">
+      <h3>权限管理 · ${esc(permTarget.label)}</h3>
+      <div id="perm-list">加载中...</div>
+      <div class="actions" style="justify-content:space-between">
+        <div style="display:flex;gap:8px">
+          <button onclick="openApplyPermission()">申请权限</button>
+          <button onclick="openInvitePermission()">邀请成员</button>
+        </div>
+        <button onclick="closePermissionModal()">关闭</button>
+      </div>
+    </div>`;
+  loadPermissionList();
+}
+async function loadPermissionList() {
+  const list = document.getElementById("perm-list");
+  try {
+    const items = await api(`/api/permissions?target_type=${permTarget.type}&target_id=${permTarget.id}`);
+    list.innerHTML = renderPermList(items);
+  } catch (e) {
+    list.innerHTML = `<div style="color:#bfbfbf;padding:12px 0">${esc(e.message)}</div>`;
+  }
+}
+function renderPermList(items) {
+  if (!items.length) return '<div style="color:#bfbfbf;padding:12px 0">暂无权限记录</div>';
+  return items.map(p => `
+    <div class="perm-item">
+      <div class="perm-main">
+        <b>${esc(p.user?.nickname || ("用户#" + p.user_id))}</b>
+        <span class="badge type-${p.permission_type}">${PERM_TYPE_LABEL[p.permission_type]}</span>
+        <span class="badge status-${p.status}">${PERM_STATUS_LABEL[p.status]}</span>
+      </div>
+      <div class="perm-meta">
+        申请于 ${fmt(p.applied_at)}${p.approved_at ? ` · 审批于 ${fmt(p.approved_at)}` : ""}${p.inviter ? ` · 邀请人 ${esc(p.inviter.nickname)}` : ""}
+      </div>
+      ${p.status === "pending" ? `
+        <div class="perm-actions">
+          <button class="primary" onclick="reviewPermission(${p.id}, true)">通过</button>
+          <button class="danger" onclick="reviewPermission(${p.id}, false)">拒绝</button>
+        </div>` : ""}
+      ${p.status === "approved" ? `
+        <div class="perm-actions">
+          <button class="danger" onclick="revokePermission(${p.id})">撤销</button>
+        </div>` : ""}
+    </div>`).join("");
+}
+async function reviewPermission(id, approve) {
+  try {
+    await api(`/api/permissions/${id}/review`, { method: "POST", body: { approve } });
+    toast(approve ? "已通过" : "已拒绝");
+    await loadPermissionList();
+  } catch (e) { toast(e.message); }
+}
+async function revokePermission(id) {
+  if (!confirm("确定撤销这条权限吗？")) return;
+  try {
+    await api(`/api/permissions/${id}`, { method: "DELETE" });
+    toast("已撤销");
+    await loadPermissionList();
+  } catch (e) { toast(e.message); }
+}
+function openApplyPermission() {
+  document.getElementById("perm-list").innerHTML = `
+    <div class="perm-form">
+      <label>权限类型</label>
+      <select id="apply-type">
+        <option value="read">读权限</option>
+        <option value="write">写权限</option>
+        <option value="admin">管理权限</option>
+      </select>
+      <div class="actions">
+        <button onclick="loadPermissionList()">取消</button>
+        <button class="primary" onclick="submitApplyPermission()">提交申请</button>
+      </div>
+    </div>`;
+}
+async function submitApplyPermission() {
+  const permission_type = document.getElementById("apply-type").value;
+  try {
+    await api("/api/permissions/apply", {
+      method: "POST",
+      body: { permission_type, target_type: permTarget.type, target_id: permTarget.id },
+    });
+    toast("已提交申请，等待审批");
+    await loadPermissionList();
+  } catch (e) { toast(e.message); }
+}
+function openInvitePermission() {
+  document.getElementById("perm-list").innerHTML = `
+    <div class="perm-form">
+      <label>用户 ID</label>
+      <input id="invite-user-id" type="number" placeholder="对方的用户 ID">
+      <label>权限类型</label>
+      <select id="invite-type">
+        <option value="read">读权限</option>
+        <option value="write">写权限</option>
+        <option value="admin">管理权限</option>
+      </select>
+      <div class="actions">
+        <button onclick="loadPermissionList()">取消</button>
+        <button class="primary" onclick="submitInvitePermission()">邀请</button>
+      </div>
+    </div>`;
+}
+async function submitInvitePermission() {
+  const user_id = Number(document.getElementById("invite-user-id").value);
+  const permission_type = document.getElementById("invite-type").value;
+  if (!user_id) return toast("请输入用户 ID");
+  try {
+    await api("/api/permissions/invite", {
+      method: "POST",
+      body: { user_id, permission_type, target_type: permTarget.type, target_id: permTarget.id },
+    });
+    toast("已邀请");
+    await loadPermissionList();
+  } catch (e) { toast(e.message); }
+}
+document.getElementById("permission-overlay").addEventListener("click", e => {
+  if (e.target.id === "permission-overlay") closePermissionModal();
+});
+
+async function renderMyPermissions() {
+  document.getElementById("profile-overlay").innerHTML = `
+    <div class="modal-card" style="width:480px">
+      <h3>我的权限申请</h3>
+      <div id="my-perm-list">加载中...</div>
+      <div class="actions"><button onclick="renderProfileView()">返回</button></div>
+    </div>`;
+  const items = await api("/api/permissions/mine");
+  document.getElementById("my-perm-list").innerHTML = items.length
+    ? items.map(p => `
+      <div class="perm-item">
+        <div class="perm-main">
+          <span class="badge target-tag">${PERM_TARGET_LABEL[p.target_type]} #${p.target_id}</span>
+          <span class="badge type-${p.permission_type}">${PERM_TYPE_LABEL[p.permission_type]}</span>
+          <span class="badge status-${p.status}">${PERM_STATUS_LABEL[p.status]}</span>
+        </div>
+        <div class="perm-meta">
+          申请于 ${fmt(p.applied_at)}${p.approved_at ? ` · 审批于 ${fmt(p.approved_at)}` : ""}${p.inviter ? ` · 邀请人 ${esc(p.inviter.nickname)}` : ""}
+        </div>
+        ${p.status === "pending" ? `<div class="perm-actions"><button class="danger" onclick="withdrawPermission(${p.id})">撤回</button></div>` : ""}
+      </div>`).join("")
+    : '<div style="color:#bfbfbf;padding:12px 0">暂无记录</div>';
+}
+async function withdrawPermission(id) {
+  if (!confirm("确定撤回这条申请吗？")) return;
+  try {
+    await api(`/api/permissions/${id}`, { method: "DELETE" });
+    toast("已撤回");
+    await renderMyPermissions();
+  } catch (e) { toast(e.message); }
+}
+
+// ---------- 用户主页 ----------
+function closeProfile() {
+  document.getElementById("profile-overlay").classList.add("hidden");
+}
+function openProfile() {
+  renderProfileView();
+  document.getElementById("profile-overlay").classList.remove("hidden");
+}
+function renderProfileView() {
+  document.getElementById("profile-overlay").innerHTML = `
+    <div class="modal-card">
+      <h3>个人主页</h3>
+      ${me.avatar_url ? `<img src="${esc(me.avatar_url)}" style="width:64px;height:64px;border-radius:50%;object-fit:cover;margin-bottom:12px">` : ""}
+      <div class="row"><span class="label">用户名</span><span class="value">${esc(me.username)}</span></div>
+      <div class="row"><span class="label">昵称</span><span class="value">${esc(me.nickname)}</span></div>
+      <div class="row"><span class="label">邮箱</span><span class="value">${esc(me.email || "未设置")}</span></div>
+      <div class="row"><span class="label">角色</span><span class="value">${me.role === "admin" ? "管理员" : "成员"}</span></div>
+      <div class="row"><span class="label">注册于</span><span class="value">${fmt(me.created_at)}</span></div>
+      <div class="actions">
+        <button onclick="closeProfile()">关闭</button>
+        <button onclick="renderMyPermissions()">我的权限</button>
+        <button class="primary" onclick="renderProfileEdit()">编辑资料</button>
+      </div>
+    </div>`;
+}
+function renderProfileEdit() {
+  pendingAvatarUrl = me.avatar_url || null;
+  document.getElementById("profile-overlay").innerHTML = `
+    <div class="modal-card">
+      <h3>编辑资料</h3>
+      <label>头像</label>
+      <div style="display:flex;align-items:center;gap:12px">
+        <img id="pf-avatar-preview" src="${esc(pendingAvatarUrl || "")}" style="width:48px;height:48px;border-radius:50%;object-fit:cover;background:#f0f0f0;${pendingAvatarUrl ? "" : "display:none;"}">
+        <input type="file" id="pf-avatar-file" accept="image/*" onchange="onAvatarSelected(event)">
+      </div>
+      <label>昵称</label>
+      <input id="pf-nickname" value="${esc(me.nickname)}">
+      <label>邮箱</label>
+      <input id="pf-email" value="${esc(me.email || "")}">
+      <div class="actions">
+        <button onclick="renderProfileView()">取消</button>
+        <button class="primary" onclick="saveProfile()">保存</button>
+      </div>
+    </div>`;
+}
+async function onAvatarSelected(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    toast("上传中...");
+    const { url } = await uploadImage(file);
+    pendingAvatarUrl = url;
+    const preview = document.getElementById("pf-avatar-preview");
+    preview.src = url;
+    preview.style.display = "";
+    toast("头像已上传，点击保存生效");
+  } catch (err) { toast(err.message); }
+}
+async function saveProfile() {
+  const nickname = document.getElementById("pf-nickname").value.trim();
+  const email = document.getElementById("pf-email").value.trim();
+  if (!nickname) return toast("昵称不能为空");
+  try {
+    me = await api("/api/auth/me", { method: "PUT", body: { nickname, email: email || null, avatar_url: pendingAvatarUrl } });
+    document.getElementById("who").textContent = me.nickname + (me.role === "admin" ? "（管理员）" : "");
+    renderUserEntry();
+    toast("已保存");
+    renderProfileView();
+  } catch (e) { toast(e.message); }
+}
+document.getElementById("profile-overlay").addEventListener("click", e => {
+  if (e.target.id === "profile-overlay") closeProfile();
+});
+
+if (token) enter().catch(() => logout());
+</script>
+</body>
+</html>

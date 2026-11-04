@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ClaudeCodeTabState">
+    <option name="tabSessions">
+      <map>
+        <entry key="0">
+          <value>
+            <TabSessionState>
+              <option name="projectPath" value="C:\Users\Administrator\PycharmProjects\WelcomeScreen\rag_kb" />
+              <option name="provider" value="claude" />
+              <option name="sessionId" value="fd959fb5-1c03-4bd6-b034-41599f917f7a" />
+              <option name="cwd" value="C:\Users\Administrator\PycharmProjects\WelcomeScreen\rag_kb" />
+              <option name="model" value="claude-sonnet-5[1m]" />
+              <option name="permissionMode" value="default" />
+            </TabSessionState>
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+</project>
