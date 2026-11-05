@@ -33,9 +33,19 @@ def member(admin):
 
 
 @pytest.fixture(scope="module")
-def kb(admin):
-    """测试用知识库，文档必须挂在某个知识库下才能创建。"""
-    return client.post("/api/knowledge-bases", headers=admin, json={"title": "测试知识库", "description": "用于单测"}).json()
+def outsider():
+    """没有任何额外授权的普通用户，用于验证权限校验确实生效。"""
+    return _auth("carol")
+
+
+@pytest.fixture(scope="module")
+def kb(admin, member):
+    """测试用知识库：admin 创建（自动获得管理权限），并邀请 member 获得管理权限以便测试多用户文档操作。"""
+    created = client.post("/api/knowledge-bases", headers=admin, json={"title": "测试知识库", "description": "用于单测"}).json()
+    client.post("/api/permissions/invite", headers=admin, json={
+        "username": "bob", "permission_type": "admin", "target_type": "knowledge_base", "target_id": created["id"],
+    })
+    return created
 
 
 def test_auth(admin, member):
@@ -92,10 +102,10 @@ def test_document_crud(admin, member, kb):
         json={"title": "报销流程", "parent_id": doc["id"], "knowledge_base_id": kb["id"]},
     ).json()
 
-    # 不同知识库下不能挂父子关系
+    # 不同知识库下不能挂父子关系（用 admin 提交以越过权限校验，单独验证这条业务规则）
     other_kb = client.post("/api/knowledge-bases", headers=admin, json={"title": "另一个知识库"}).json()
     r = client.post(
-        "/api/documents", headers=member,
+        "/api/documents", headers=admin,
         json={"title": "跨库子文档", "parent_id": doc["id"], "knowledge_base_id": other_kb["id"]},
     )
     assert r.status_code == 400
@@ -127,7 +137,7 @@ def test_document_crud(admin, member, kb):
     assert r.status_code == 200 and r.json()["parent_id"] is None
 
 
-def test_delete_permission_and_cascade(admin, member, kb):
+def test_delete_permission_and_cascade(admin, member, kb, outsider):
     """测试删除权限校验以及父文档删除时子文档级联软删除。"""
     parent = client.post("/api/documents", headers=admin, json={"title": "管理员文档", "knowledge_base_id": kb["id"]}).json()
     child = client.post(
@@ -135,8 +145,8 @@ def test_delete_permission_and_cascade(admin, member, kb):
         json={"title": "子文档", "parent_id": parent["id"], "knowledge_base_id": kb["id"]},
     ).json()
 
-    # 普通成员不能删除别人创建的文档
-    assert client.delete(f"/api/documents/{parent['id']}", headers=member).status_code == 403
+    # 没有该知识库权限的用户不能删除其中的文档
+    assert client.delete(f"/api/documents/{parent['id']}", headers=outsider).status_code == 403
 
     # 删除父文档，子文档一起被软删除
     assert client.delete(f"/api/documents/{parent['id']}", headers=admin).status_code == 204
@@ -151,3 +161,155 @@ def test_delete_permission_and_cascade(admin, member, kb):
         json={"title": "x", "parent_id": parent["id"], "knowledge_base_id": kb["id"]},
     )
     assert r.status_code == 404
+
+
+def test_access_control_tiers(admin, outsider):
+    """测试读/写/管理三级权限分别生效：无权限不能访问，读权限不能改，写权限不能增删，管理权限才能增删。"""
+    kb = client.post("/api/knowledge-bases", headers=admin, json={"title": "权限分级知识库"}).json()
+    doc = client.post("/api/documents", headers=admin, json={"title": "初始文档", "knowledge_base_id": kb["id"]}).json()
+
+    # 完全没有权限：看不到该知识库，看不了文档，改不了，删不了
+    assert kb["id"] not in {k["id"] for k in client.get("/api/knowledge-bases", headers=outsider).json()}
+    assert client.get(f"/api/knowledge-bases/{kb['id']}", headers=outsider).status_code == 403
+    no_access = client.get("/api/permissions/check", headers=outsider,
+                            params={"target_type": "knowledge_base", "target_id": kb["id"]}).json()
+    assert no_access == {"read": False, "write": False, "admin": False}
+    assert client.get(f"/api/documents/{doc['id']}", headers=outsider).status_code == 403
+    assert client.get("/api/documents/tree", headers=outsider, params={"knowledge_base_id": kb["id"]}).status_code == 403
+    assert client.put(f"/api/documents/{doc['id']}", headers=outsider, json={"title": "x", "version": 1}).status_code == 403
+    assert client.post(
+        "/api/documents", headers=outsider, json={"title": "x", "knowledge_base_id": kb["id"]}
+    ).status_code == 403
+    assert client.delete(f"/api/documents/{doc['id']}", headers=outsider).status_code == 403
+
+    # 申请并通过「读权限」：能看，不能改也不能增删
+    apply_r = client.post("/api/permissions/apply", headers=outsider, json={
+        "permission_type": "read", "target_type": "knowledge_base", "target_id": kb["id"],
+    }).json()
+    client.post(f"/api/permissions/{apply_r['id']}/review", headers=admin, json={"approve": True})
+
+    assert client.get(f"/api/knowledge-bases/{kb['id']}", headers=outsider).status_code == 200
+    assert client.get(f"/api/documents/{doc['id']}", headers=outsider).status_code == 200
+    read_only = client.get("/api/permissions/check", headers=outsider,
+                            params={"target_type": "document", "target_id": doc["id"]}).json()
+    assert read_only == {"read": True, "write": False, "admin": False}
+    assert client.put(f"/api/documents/{doc['id']}", headers=outsider, json={"title": "x", "version": 1}).status_code == 403
+    assert client.post(
+        "/api/documents", headers=outsider, json={"title": "x", "knowledge_base_id": kb["id"]}
+    ).status_code == 403
+    assert client.delete(f"/api/documents/{doc['id']}", headers=outsider).status_code == 403
+
+    # 邀请升级为「写权限」：能改了，依然不能增删
+    client.post("/api/permissions/invite", headers=admin, json={
+        "username": "carol", "permission_type": "write", "target_type": "knowledge_base", "target_id": kb["id"],
+    })
+    r = client.put(f"/api/documents/{doc['id']}", headers=outsider, json={"title": "改过的标题", "version": 1})
+    assert r.status_code == 200 and r.json()["title"] == "改过的标题"
+    assert client.post(
+        "/api/documents", headers=outsider, json={"title": "x", "knowledge_base_id": kb["id"]}
+    ).status_code == 403
+    assert client.delete(f"/api/documents/{doc['id']}", headers=outsider).status_code == 403
+
+    # 邀请升级为「管理权限」：才能新建 / 删除
+    client.post("/api/permissions/invite", headers=admin, json={
+        "username": "carol", "permission_type": "admin", "target_type": "knowledge_base", "target_id": kb["id"],
+    })
+    new_doc = client.post(
+        "/api/documents", headers=outsider, json={"title": "新文档", "knowledge_base_id": kb["id"]}
+    )
+    assert new_doc.status_code == 201
+    assert client.delete(f"/api/documents/{new_doc.json()['id']}", headers=outsider).status_code == 204
+
+
+def test_notifications(admin, kb):
+    """测试申请权限时给审批人生成待办通知：点开可手动标记已读，审批后自动清除该待办。"""
+    applicant = _auth("dave")
+    other = _auth("erin")  # 对该知识库没有管理权限，不应该收到通知
+
+    # ---- 场景一：申请后生成待办，手动点开标记已读，再审批通过 ----
+    before = client.get("/api/notifications/unread-count", headers=admin).json()["count"]
+    apply_read = client.post("/api/permissions/apply", headers=applicant, json={
+        "permission_type": "read", "target_type": "knowledge_base", "target_id": kb["id"],
+    }).json()
+    assert client.get("/api/notifications/unread-count", headers=admin).json()["count"] == before + 1
+
+    notifications = client.get("/api/notifications", headers=admin, params={"unread_only": True}).json()
+    mine = next(n for n in notifications if n["permission_id"] == apply_read["id"])
+    assert mine["is_read"] is False
+    assert mine["target_type"] == "knowledge_base" and mine["target_id"] == kb["id"]
+    assert "dave" in mine["title"]
+
+    marked = client.post(f"/api/notifications/{mine['id']}/read", headers=admin).json()
+    assert marked["is_read"] is True
+    assert client.get("/api/notifications/unread-count", headers=admin).json()["count"] == before
+
+    client.post(f"/api/permissions/{apply_read['id']}/review", headers=admin, json={"approve": True})
+
+    # ---- 场景二：再申请一次，这次直接审批（不手动点开），待办应自动清零 ----
+    apply_write = client.post("/api/permissions/apply", headers=applicant, json={
+        "permission_type": "write", "target_type": "knowledge_base", "target_id": kb["id"],
+    }).json()
+    before2 = client.get("/api/notifications/unread-count", headers=admin).json()["count"]
+    assert before2 == before + 1
+    client.post(f"/api/permissions/{apply_write['id']}/review", headers=admin, json={"approve": True})
+    assert client.get("/api/notifications/unread-count", headers=admin).json()["count"] == before
+
+    # ---- 场景三：没有管理权限的人不会收到通知 ----
+    before3 = client.get("/api/notifications/unread-count", headers=other).json()["count"]
+    client.post("/api/permissions/apply", headers=applicant, json={
+        "permission_type": "admin", "target_type": "knowledge_base", "target_id": kb["id"],
+    })
+    assert client.get("/api/notifications/unread-count", headers=other).json()["count"] == before3
+
+
+def test_invite_links(admin, member, outsider, kb):
+    """测试邀请链接：生成、权限校验、单次兑换自动获得权限、兑换后失效、撤销。"""
+    # 没有管理权限的人不能生成邀请链接
+    r = client.post("/api/invite-links", headers=outsider, json={
+        "target_type": "knowledge_base", "target_id": kb["id"], "permission_type": "read",
+    })
+    assert r.status_code == 403
+
+    # admin（知识库创建者）生成一条读权限邀请链接
+    link = client.post("/api/invite-links", headers=admin, json={
+        "target_type": "knowledge_base", "target_id": kb["id"], "permission_type": "read",
+    }).json()
+    assert link["permission_id"] is None and link["is_revoked"] is False
+
+    # 只有管理权限持有者能看到链接列表
+    assert client.get("/api/invite-links", headers=outsider,
+                       params={"target_type": "knowledge_base", "target_id": kb["id"]}).status_code == 403
+    links = client.get("/api/invite-links", headers=admin,
+                        params={"target_type": "knowledge_base", "target_id": kb["id"]}).json()
+    assert any(l["id"] == link["id"] for l in links)
+
+    # outsider 兑换链接，自动获得读权限
+    assert client.get(f"/api/knowledge-bases/{kb['id']}", headers=outsider).status_code == 403
+    redeemed = client.post("/api/invite-links/redeem", headers=outsider, json={"token": link["token"]}).json()
+    assert redeemed == {"target_type": "knowledge_base", "target_id": kb["id"], "permission_type": "read"}
+    assert client.get(f"/api/knowledge-bases/{kb['id']}", headers=outsider).status_code == 200
+    tmp_doc = client.post("/api/documents", headers=admin, json={"title": "tmp", "knowledge_base_id": kb["id"]}).json()
+    r = client.put(f"/api/documents/{tmp_doc['id']}", headers=outsider, json={"title": "x", "version": 1})
+    assert r.status_code == 403  # 只有读权限，不能写
+
+    # 链接绑定了兑换产生的权限记录，列表里能看到是谁、什么时候兑换的
+    link_after = client.get("/api/invite-links", headers=admin,
+                             params={"target_type": "knowledge_base", "target_id": kb["id"]}).json()
+    used_link = next(l for l in link_after if l["id"] == link["id"])
+    assert used_link["permission_id"] is not None
+    assert used_link["redeemed_by"]["nickname"] == "carol"
+
+    # 每条链接只能兑换一次：同一个人或其他人再次使用同一个 token 都会失败
+    assert client.post("/api/invite-links/redeem", headers=outsider, json={"token": link["token"]}).status_code == 400
+    frank = _auth("frank")
+    assert client.post("/api/invite-links/redeem", headers=frank, json={"token": link["token"]}).status_code == 400
+
+    # 撤销一条还未被使用的链接后，不能再被兑换
+    revocable = client.post("/api/invite-links", headers=admin, json={
+        "target_type": "knowledge_base", "target_id": kb["id"], "permission_type": "read",
+    }).json()
+    assert client.delete(f"/api/invite-links/{revocable['id']}", headers=member).status_code == 204  # member 也有该库管理权限
+    assert client.post("/api/invite-links/redeem", headers=frank, json={"token": revocable["token"]}).status_code == 400
+
+    # 无效 token
+    assert client.post("/api/invite-links/redeem", headers=frank, json={"token": "not-a-real-token"}).status_code == 404

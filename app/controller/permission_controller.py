@@ -6,7 +6,7 @@ from ..dto.permission_dto import PermissionApplyDTO, PermissionInviteDTO, Permis
 from ..entity import User
 from ..security.auth_dependency import get_current_user
 from ..service.permission_service import PermissionService
-from ..vo.permission_vo import PermissionVO
+from ..vo.permission_vo import AccessLevelVO, PermissionVO
 
 router = APIRouter(prefix="/api/permissions", tags=["权限"])
 
@@ -15,6 +15,17 @@ router = APIRouter(prefix="/api/permissions", tags=["权限"])
 def list_my_permissions(permission_service: PermissionService = Depends(), current: User = Depends(get_current_user)):
     """查看我发起的全部权限记录（自助申请 + 被邀请）。"""
     return permission_service.list_mine(current)
+
+
+@router.get("/check", response_model=AccessLevelVO)
+def check_my_access(
+    target_type: TargetType = Query(description="knowledge_base / document"),
+    target_id: int = Query(),
+    permission_service: PermissionService = Depends(),
+    current: User = Depends(get_current_user),
+):
+    """查询当前用户对某 target 的有效权限（读/写/管理），供前端决定按钮显隐，任何登录用户均可查自己的。"""
+    return permission_service.my_access(target_type, target_id, current)
 
 
 @router.get("", response_model=List[PermissionVO])

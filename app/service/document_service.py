@@ -4,12 +4,13 @@ from typing import List, Optional, Set
 from fastapi import Depends
 from sqlalchemy.orm import Session
 
-from ..common.exceptions import BadRequestException, ConflictException, ForbiddenException, NotFoundException
+from ..common.exceptions import BadRequestException, ConflictException, NotFoundException
 from ..config.database import get_db
 from ..dto.document_dto import DocumentCreateDTO, DocumentQueryDTO, DocumentUpdateDTO
 from ..entity import Document, User
 from ..mapper.document_mapper import DocumentMapper
 from ..mapper.user_mapper import UserMapper
+from ..service.access_control import AccessControl
 from ..service.knowledge_base_service import KnowledgeBaseService
 from ..util.text_util import content_meta
 from ..vo.document_vo import DocumentBriefVO, DocumentVO
@@ -18,7 +19,11 @@ from ..vo.user_vo import UserBriefVO
 
 
 class DocumentService:
-    """文档相关业务：目录树、分页、增删改查、乐观锁、级联软删除。"""
+    """文档相关业务：目录树、分页、增删改查、乐观锁、级联软删除。
+
+    访问控制：读取需要读权限，编辑需要写权限，新建/删除需要知识库（或文档）的管理权限；
+    文档权限可继承自所属知识库的权限，见 AccessControl。
+    """
 
     def __init__(
         self,
@@ -26,22 +31,33 @@ class DocumentService:
         document_mapper: DocumentMapper = Depends(),
         user_mapper: UserMapper = Depends(),
         knowledge_base_service: KnowledgeBaseService = Depends(),
+        access_control: AccessControl = Depends(),
     ):
-        """构造器注入数据库会话（用于提交事务）、DocumentMapper、UserMapper 和 KnowledgeBaseService。"""
+        """构造器注入数据库会话（用于提交事务）、DocumentMapper、UserMapper、KnowledgeBaseService 和 AccessControl。"""
         self.db = db
         self.document_mapper = document_mapper
         self.user_mapper = user_mapper
         self.knowledge_base_service = knowledge_base_service
+        self.access_control = access_control
 
     # ========================= 查询 =========================
 
-    def tree(self, knowledge_base_id: int) -> List[DocumentBriefVO]:
-        """返回某知识库下全部未删除文档（不含正文），前端按 parent_id 组装目录树。"""
+    def tree(self, knowledge_base_id: int, current: User) -> List[DocumentBriefVO]:
+        """返回某知识库下全部未删除文档（不含正文），前端按 parent_id 组装目录树；需要该知识库的读权限。"""
         self.knowledge_base_service.get_alive(knowledge_base_id)
+        self.access_control.require_access(current, "read", "knowledge_base", knowledge_base_id)
         return [DocumentBriefVO.model_validate(d) for d in self.document_mapper.select_alive_all(knowledge_base_id)]
 
-    def page(self, query: DocumentQueryDTO) -> PageVO[DocumentBriefVO]:
-        """按标题关键字、知识库、父文档分页查询，按更新时间倒序。"""
+    def page(self, query: DocumentQueryDTO, current: User) -> PageVO[DocumentBriefVO]:
+        """按标题关键字、知识库、父文档分页查询，按更新时间倒序。
+
+        指定了知识库时需要该知识库的读权限；不指定（跨知识库搜索）仅系统管理员可用。
+        """
+        if query.knowledge_base_id is not None:
+            self.access_control.require_access(current, "read", "knowledge_base", query.knowledge_base_id)
+        elif current.role != "admin":
+            raise BadRequestException("请指定要查询的知识库")
+
         total = self.document_mapper.count_alive(query.keyword, query.knowledge_base_id, query.parent_id)
         docs = self.document_mapper.select_alive_page(
             query.keyword, query.knowledge_base_id, query.parent_id,
@@ -49,15 +65,18 @@ class DocumentService:
         )
         return PageVO[DocumentBriefVO](total=total, items=[DocumentBriefVO.model_validate(d) for d in docs])
 
-    def detail(self, doc_id: int) -> DocumentVO:
-        """获取单个文档详情（含正文）。"""
-        return self._to_vo(self._get_alive(doc_id))
+    def detail(self, doc_id: int, current: User) -> DocumentVO:
+        """获取单个文档详情（含正文），需要读权限（可来自文档本身或所属知识库）。"""
+        doc = self._get_alive(doc_id)
+        self.access_control.require_access(current, "read", "document", doc_id, doc.knowledge_base_id)
+        return self._to_vo(doc)
 
     # ========================= 写操作 =========================
 
     def create(self, dto: DocumentCreateDTO, current: User) -> DocumentVO:
-        """新建文档，必须归属于一个已存在的知识库；当前用户同时作为创建人和最后编辑人。"""
+        """新建文档，必须归属于一个已存在的知识库，且需要该知识库的管理权限；当前用户同时作为创建人和最后编辑人。"""
         self.knowledge_base_service.get_alive(dto.knowledge_base_id)
+        self.access_control.require_access(current, "admin", "knowledge_base", dto.knowledge_base_id)
         self._check_parent(dto.parent_id, dto.knowledge_base_id)
         word_count, content_hash = content_meta(dto.content)
         doc = Document(
@@ -77,8 +96,9 @@ class DocumentService:
         return self._to_vo(doc)
 
     def update(self, doc_id: int, dto: DocumentUpdateDTO, current: User) -> DocumentVO:
-        """编辑文档，只更新传入的字段；通过版本号做乐观锁，版本不一致抛 409。"""
+        """编辑文档，只更新传入的字段；需要写权限；通过版本号做乐观锁，版本不一致抛 409。"""
         doc = self._get_alive(doc_id)
+        self.access_control.require_access(current, "write", "document", doc_id, doc.knowledge_base_id)
         fields = dto.model_dump(exclude_unset=True, exclude={"version"})
 
         values = {}
@@ -105,10 +125,9 @@ class DocumentService:
         return self._to_vo(doc)
 
     def delete(self, doc_id: int, current: User) -> None:
-        """软删除文档及其全部子文档，仅创建者或管理员可操作。"""
+        """软删除文档及其全部子文档，需要管理权限（可来自文档本身或所属知识库）。"""
         doc = self._get_alive(doc_id)
-        if doc.creator_id != current.id and current.role != "admin":
-            raise ForbiddenException("只有创建者或管理员可以删除文档")
+        self.access_control.require_access(current, "admin", "document", doc_id, doc.knowledge_base_id)
 
         # 软删除：连同所有子文档一起放入"回收站"
         ids = self._descendant_ids(doc.id) | {doc.id}

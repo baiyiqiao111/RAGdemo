@@ -100,6 +100,18 @@
   .kb-item .kb-meta { font-size: 12px; color: #bfbfbf; margin-top: 2px; }
   #sidebar-header.drag-over { background: #e6f7ef; }
   #sidebar-header .back { border: none; background: none; padding: 0 4px 0 0; color: #8c8c8c; font-size: 16px; }
+  /* 系统通知 */
+  #notif-entry { position: fixed; top: 12px; right: 64px; z-index: 50; width: 36px; height: 36px; border-radius: 50%; background: #fff; border: 1px solid #d9d9d9; display: flex; align-items: center; justify-content: center; font-size: 17px; cursor: pointer; user-select: none; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+  #notif-badge { position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; padding: 0 3px; border-radius: 8px; background: #ff4d4f; color: #fff; font-size: 11px; line-height: 16px; text-align: center; }
+  #notif-panel { position: fixed; top: 54px; right: 64px; width: 360px; max-height: 420px; overflow: auto; background: #fff; border: 1px solid #d9d9d9; border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,.15); z-index: 90; }
+  .notif-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid #f0f0f0; font-size: 14px; font-weight: 600; }
+  .notif-header button { font-size: 12px; padding: 2px 8px; }
+  .notif-item { padding: 10px 14px; border-bottom: 1px solid #f5f5f5; cursor: pointer; font-size: 13px; }
+  .notif-item:last-child { border-bottom: none; }
+  .notif-item:hover { background: #f5f5f5; }
+  .notif-item.unread { background: #f0f9f4; }
+  .notif-item .notif-title { font-weight: 600; }
+  .notif-item .notif-meta { color: #8c8c8c; font-size: 12px; margin-top: 2px; }
 </style>
 </head>
 <body>
@@ -123,17 +135,21 @@
     <footer><span id="who"></span><a href="#" onclick="logout()">退出</a></footer>
   </aside>
   <main id="main"><div class="empty">选择左侧文档，或点击「新建」</div></main>
+  <div id="notif-entry" title="通知" onclick="toggleNotifPanel(event)">🔔<span id="notif-badge" class="hidden"></span></div>
+  <div id="notif-panel" class="hidden"></div>
   <div id="user-entry" title="个人主页" onclick="openProfile()"></div>
 </div>
 
 <div id="profile-overlay" class="modal-overlay hidden"></div>
 <div id="kb-overlay" class="modal-overlay hidden"></div>
 <div id="permission-overlay" class="modal-overlay hidden"></div>
+<div id="invite-link-overlay" class="modal-overlay hidden"></div>
 
 <div id="toast" class="hidden"></div>
 
 <script>
 let token = localStorage.getItem("kb_token");
+let pendingInviteToken = new URLSearchParams(location.search).get("invite") || null;
 let me = null;
 let docs = [];          // 目录树数据（不含正文）
 let current = null;     // 当前打开的完整文档
@@ -183,6 +199,7 @@ async function login() {
     const data = await api("/api/auth/login", { method: "POST", body: creds() });
     token = data.access_token; localStorage.setItem("kb_token", token);
     await enter();
+    await redeemPendingInvite();
   } catch (e) { toast(e.message); }
 }
 async function register() {
@@ -192,7 +209,7 @@ async function register() {
   } catch (e) { toast(e.message); }
 }
 function creds() { return { username: username.value.trim(), password: password.value }; }
-function logout() { token = null; localStorage.removeItem("kb_token"); location.reload(); }
+function logout() { token = null; localStorage.removeItem("kb_token"); stopNotifPolling(); location.reload(); }
 
 async function enter() {
   me = await api("/api/auth/me");
@@ -200,6 +217,8 @@ async function enter() {
   document.getElementById("app").classList.remove("hidden");
   document.getElementById("who").textContent = me.nickname + (me.role === "admin" ? "（管理员）" : "");
   renderUserEntry();
+  await refreshNotifBadge();
+  startNotifPolling();
   await renderKbList();
 }
 function renderUserEntry() {
@@ -212,9 +231,13 @@ function renderUserEntry() {
 // ---------- 知识库 ----------
 let kbs = [];
 let currentKb = null; // 当前选中的知识库：{ id, title, description, created_at }
+let currentKbAccess = { read: false, write: false, admin: false }; // 当前用户对 currentKb 的有效权限
+let currentDocAccess = { read: false, write: false, admin: false }; // 当前用户对 current 文档的有效权限
 
 async function renderKbList() {
   currentKb = null; current = null; editing = null; docs = [];
+  currentKbAccess = { read: false, write: false, admin: false };
+  currentDocAccess = { read: false, write: false, admin: false };
   kbs = await api("/api/knowledge-bases");
   document.getElementById("sidebar-header").innerHTML =
     `<strong>知识库</strong><button class="primary" onclick="openCreateKb()">+ 新建</button>`;
@@ -232,11 +255,13 @@ async function renderKbList() {
 async function openKnowledgeBase(kbId) {
   currentKb = kbs.find(k => k.id === kbId) || await api("/api/knowledge-bases/" + kbId);
   current = null; editing = null;
+  currentKbAccess = await api(`/api/permissions/check?target_type=knowledge_base&target_id=${kbId}`);
   document.getElementById("sidebar-header").innerHTML = `
     <button class="back" title="返回知识库列表" onclick="renderKbList()">←</button>
     <strong style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(currentKb.title)}">${esc(currentKb.title)}</strong>
     <button onclick="openPermissionModal('knowledge_base', currentKb.id, currentKb.title)">权限</button>
-    <button class="primary" onclick="newDoc(null)">+ 新建</button>`;
+    ${currentKbAccess.admin ? `<button onclick="openInviteLinkModal('knowledge_base', currentKb.id, currentKb.title)">邀请链接</button>` : ""}
+    ${currentKbAccess.admin ? '<button class="primary" onclick="newDoc(null)">+ 新建</button>' : ""}`;
   const header = document.getElementById("sidebar-header");
   header.title = "拖拽文档到此处移到顶层";
   header.ondragover = onRootDragOver;
@@ -293,7 +318,7 @@ async function loadTree() {
          ondragleave="onNodeDragLeave(event)"
          ondrop="onNodeDrop(event, ${d.id})">
       <span class="name">📄 ${esc(d.title)}</span>
-      <button class="add" title="新建子文档" onclick="event.stopPropagation(); newDoc(${d.id})">+</button>
+      ${currentKbAccess.admin ? `<button class="add" title="新建子文档" onclick="event.stopPropagation(); newDoc(${d.id})">+</button>` : ""}
     </div>` + build(d.id, depth + 1)).join("");
   document.getElementById("tree").innerHTML = build("root", 0) || '<div style="color:#bfbfbf;padding:8px">暂无文档</div>';
 }
@@ -353,13 +378,14 @@ async function openDoc(id) {
   editing = null;
   try { current = await api("/api/documents/" + id); } catch (e) { toast(e.message); return loadTree(); }
   document.getElementById("user-entry").classList.remove("hidden");
-  const canDelete = current.creator_id === me.id || me.role === "admin";
+  currentDocAccess = await api(`/api/permissions/check?target_type=document&target_id=${id}`);
   document.getElementById("main").innerHTML = `
     <div class="toolbar with-avatar-gap">
       <span class="meta">${esc(current.updater?.nickname || "")} 更新于 ${fmt(current.updated_at)} · ${current.word_count} 字</span>
       <button onclick="openPermissionModal('document', current.id, current.title)">权限</button>
-      <button class="primary" onclick="editDoc()">编辑</button>
-      ${canDelete ? '<button class="danger" onclick="deleteDoc()">删除</button>' : ""}
+      ${currentDocAccess.admin ? `<button onclick="openInviteLinkModal('document', current.id, current.title)">邀请链接</button>` : ""}
+      ${currentDocAccess.write ? '<button class="primary" onclick="editDoc()">编辑</button>' : ""}
+      ${currentDocAccess.admin ? '<button class="danger" onclick="deleteDoc()">删除</button>' : ""}
     </div>
     <article class="doc"><h1 class="title">${esc(current.title)}</h1><div class="markdown">${renderMd(current.content)}</div></article>`;
   loadTree();
@@ -658,6 +684,7 @@ async function reviewPermission(id, approve) {
     await api(`/api/permissions/${id}/review`, { method: "POST", body: { approve } });
     toast(approve ? "已通过" : "已拒绝");
     await loadPermissionList();
+    await refreshNotifBadge();
   } catch (e) { toast(e.message); }
 }
 async function revokePermission(id) {
@@ -697,8 +724,8 @@ async function submitApplyPermission() {
 function openInvitePermission() {
   document.getElementById("perm-list").innerHTML = `
     <div class="perm-form">
-      <label>用户 ID</label>
-      <input id="invite-user-id" type="number" placeholder="对方的用户 ID">
+      <label>用户名</label>
+      <input id="invite-username" placeholder="对方的用户名">
       <label>权限类型</label>
       <select id="invite-type">
         <option value="read">读权限</option>
@@ -712,13 +739,13 @@ function openInvitePermission() {
     </div>`;
 }
 async function submitInvitePermission() {
-  const user_id = Number(document.getElementById("invite-user-id").value);
+  const username = document.getElementById("invite-username").value.trim();
   const permission_type = document.getElementById("invite-type").value;
-  if (!user_id) return toast("请输入用户 ID");
+  if (!username) return toast("请输入用户名");
   try {
     await api("/api/permissions/invite", {
       method: "POST",
-      body: { user_id, permission_type, target_type: permTarget.type, target_id: permTarget.id },
+      body: { username, permission_type, target_type: permTarget.type, target_id: permTarget.id },
     });
     toast("已邀请");
     await loadPermissionList();
@@ -759,6 +786,221 @@ async function withdrawPermission(id) {
     await renderMyPermissions();
   } catch (e) { toast(e.message); }
 }
+
+// ---------- 邀请链接 ----------
+let inviteLinkTarget = null; // 当前管理邀请链接的目标：{ type, id, label }
+
+function openInviteLinkModal(targetType, targetId, label) {
+  inviteLinkTarget = { type: targetType, id: targetId, label };
+  renderInviteLinkModal();
+  document.getElementById("invite-link-overlay").classList.remove("hidden");
+}
+function closeInviteLinkModal() {
+  document.getElementById("invite-link-overlay").classList.add("hidden");
+}
+function renderInviteLinkModal() {
+  document.getElementById("invite-link-overlay").innerHTML = `
+    <div class="modal-card" style="width:480px">
+      <h3>邀请链接 · ${esc(inviteLinkTarget.label)}</h3>
+      <div id="invite-link-body">加载中...</div>
+      <div class="actions" style="justify-content:space-between">
+        <button onclick="openCreateInviteLinkForm()">+ 生成新链接</button>
+        <button onclick="closeInviteLinkModal()">关闭</button>
+      </div>
+    </div>`;
+  loadInviteLinkList();
+}
+async function loadInviteLinkList() {
+  const body = document.getElementById("invite-link-body");
+  try {
+    const links = await api(`/api/invite-links?target_type=${inviteLinkTarget.type}&target_id=${inviteLinkTarget.id}`);
+    body.innerHTML = links.length ? links.map(renderInviteLinkItem).join("") : '<div style="color:#bfbfbf;padding:12px 0">还没有生成过邀请链接</div>';
+  } catch (e) {
+    body.innerHTML = `<div style="color:#bfbfbf;padding:12px 0">${esc(e.message)}</div>`;
+  }
+}
+function renderInviteLinkItem(l) {
+  const used = l.permission_id !== null;
+  const expired = l.expires_at && new Date(l.expires_at) < new Date();
+  const statusBadge = used
+    ? '<span class="badge status-approved">已使用</span>'
+    : l.is_revoked
+      ? '<span class="badge status-rejected">已撤销</span>'
+      : expired
+        ? '<span class="badge status-rejected">已过期</span>'
+        : '<span class="badge status-pending">待使用</span>';
+  return `
+    <div class="perm-item">
+      <div class="perm-main">
+        <span class="badge type-${l.permission_type}">${PERM_TYPE_LABEL[l.permission_type]}</span>
+        ${statusBadge}
+      </div>
+      <div class="perm-meta">
+        ${used
+          ? `已被 ${esc(l.redeemed_by?.nickname || ("用户#" + l.permission_id))} 兑换于 ${fmt(l.redeemed_at)}`
+          : (l.expires_at ? `过期时间 ${fmt(l.expires_at)}` : "永久有效，直到被使用或撤销")}
+        · 创建于 ${fmt(l.created_at)}
+      </div>
+      <div class="perm-actions">
+        ${!used ? `<button onclick="copyInviteLink('${l.token}')">复制链接</button>` : ""}
+        ${!used && !l.is_revoked ? `<button class="danger" onclick="revokeInviteLink(${l.id})">撤销</button>` : ""}
+      </div>
+    </div>`;
+}
+function buildInviteLinkUrl(tok) {
+  return `${location.origin}${location.pathname}?invite=${tok}`;
+}
+async function copyInviteLink(tok) {
+  const url = buildInviteLinkUrl(tok);
+  try {
+    await navigator.clipboard.writeText(url);
+    toast("邀请链接已复制");
+  } catch (e) {
+    toast(url);
+  }
+}
+async function revokeInviteLink(id) {
+  if (!confirm("确定撤销这条邀请链接吗？")) return;
+  try {
+    await api(`/api/invite-links/${id}`, { method: "DELETE" });
+    toast("已撤销");
+    await loadInviteLinkList();
+  } catch (e) { toast(e.message); }
+}
+function openCreateInviteLinkForm() {
+  document.getElementById("invite-link-body").innerHTML = `
+    <div class="perm-form">
+      <label>权限类型</label>
+      <select id="link-type">
+        <option value="read">读权限</option>
+        <option value="write">写权限</option>
+        <option value="admin">管理权限</option>
+      </select>
+      <label>有效期（小时，留空为永久有效直到被使用）</label>
+      <input id="link-expires" type="number" min="1" placeholder="例如 24">
+      <div style="font-size:12px;color:#8c8c8c;margin-top:4px">每条链接只能被兑换一次，用过之后会自动失效</div>
+      <div class="actions">
+        <button onclick="loadInviteLinkList()">取消</button>
+        <button class="primary" onclick="submitCreateInviteLink()">生成</button>
+      </div>
+    </div>`;
+}
+async function submitCreateInviteLink() {
+  const permission_type = document.getElementById("link-type").value;
+  const expiresVal = document.getElementById("link-expires").value.trim();
+  try {
+    const link = await api("/api/invite-links", {
+      method: "POST",
+      body: {
+        permission_type,
+        target_type: inviteLinkTarget.type,
+        target_id: inviteLinkTarget.id,
+        expires_in_hours: expiresVal ? Number(expiresVal) : null,
+      },
+    });
+    const url = buildInviteLinkUrl(link.token);
+    document.getElementById("invite-link-body").innerHTML = `
+      <div class="perm-form">
+        <label>邀请链接已生成，发给对方，对方登录后点开即可自动获得${PERM_TYPE_LABEL[link.permission_type]}</label>
+        <input id="new-invite-link-url" readonly value="${esc(url)}" onclick="this.select()">
+        <div class="actions">
+          <button onclick="loadInviteLinkList()">完成</button>
+          <button class="primary" onclick="copyInviteLink('${link.token}')">复制链接</button>
+        </div>
+      </div>`;
+  } catch (e) { toast(e.message); }
+}
+async function redeemPendingInvite() {
+  if (!pendingInviteToken) return;
+  const tok = pendingInviteToken;
+  pendingInviteToken = null;
+  const url = new URL(location.href);
+  url.searchParams.delete("invite");
+  history.replaceState(null, "", url.toString());
+  try {
+    const result = await api("/api/invite-links/redeem", { method: "POST", body: { token: tok } });
+    toast(`已获得${PERM_TYPE_LABEL[result.permission_type]}`);
+    if (result.target_type === "knowledge_base") {
+      await openKnowledgeBase(result.target_id);
+    } else {
+      const doc = await api("/api/documents/" + result.target_id);
+      await openKnowledgeBase(doc.knowledge_base_id);
+      await openDoc(result.target_id);
+    }
+  } catch (e) { toast(e.message); }
+}
+document.getElementById("invite-link-overlay").addEventListener("click", e => {
+  if (e.target.id === "invite-link-overlay") closeInviteLinkModal();
+});
+
+// ---------- 系统通知 ----------
+let notifPanelOpen = false;
+let notifPollTimer = null;
+let lastUnreadCount = null; // null 表示尚未拉取过，避免首次登录时把已有的未读也当成"新通知"弹出提示
+function startNotifPolling() {
+  stopNotifPolling();
+  notifPollTimer = setInterval(() => { refreshNotifBadge().catch(() => {}); }, 30000);
+}
+function stopNotifPolling() {
+  if (notifPollTimer) { clearInterval(notifPollTimer); notifPollTimer = null; }
+}
+async function refreshNotifBadge() {
+  const { count } = await api("/api/notifications/unread-count");
+  const badge = document.getElementById("notif-badge");
+  if (count > 0) {
+    badge.textContent = count > 99 ? "99+" : String(count);
+    badge.classList.remove("hidden");
+  } else {
+    badge.classList.add("hidden");
+  }
+  if (lastUnreadCount !== null && count > lastUnreadCount) toast("你有新的通知");
+  lastUnreadCount = count;
+}
+async function toggleNotifPanel(e) {
+  e.stopPropagation();
+  notifPanelOpen = !notifPanelOpen;
+  document.getElementById("notif-panel").classList.toggle("hidden", !notifPanelOpen);
+  if (notifPanelOpen) await renderNotifPanel();
+}
+async function renderNotifPanel() {
+  const panel = document.getElementById("notif-panel");
+  panel.innerHTML = `
+    <div class="notif-header">
+      <span>通知</span>
+      <button onclick="markAllNotifRead(event)">全部已读</button>
+    </div>
+    <div id="notif-list">加载中...</div>`;
+  const items = await api("/api/notifications");
+  document.getElementById("notif-list").innerHTML = items.length
+    ? items.map(n => `
+      <div class="notif-item ${n.is_read ? "" : "unread"}" onclick="openNotification(event, ${n.id}, '${n.target_type}', ${n.target_id})">
+        <div class="notif-title">${esc(n.title)}</div>
+        <div class="notif-meta">${fmt(n.created_at)}</div>
+      </div>`).join("")
+    : '<div style="padding:16px;color:#bfbfbf;text-align:center">暂无通知</div>';
+}
+async function openNotification(e, id, targetType, targetId) {
+  e.stopPropagation();
+  try { await api(`/api/notifications/${id}/read`, { method: "POST" }); } catch (err) { /* 忽略，不影响跳转 */ }
+  notifPanelOpen = false;
+  document.getElementById("notif-panel").classList.add("hidden");
+  await refreshNotifBadge();
+  openPermissionModal(targetType, targetId, targetType === "knowledge_base" ? `知识库 #${targetId}` : `文档 #${targetId}`);
+}
+async function markAllNotifRead(e) {
+  e.stopPropagation();
+  try {
+    await api("/api/notifications/read-all", { method: "POST" });
+    await renderNotifPanel();
+    await refreshNotifBadge();
+  } catch (err) { toast(err.message); }
+}
+document.addEventListener("click", () => {
+  if (notifPanelOpen) {
+    notifPanelOpen = false;
+    document.getElementById("notif-panel").classList.add("hidden");
+  }
+});
 
 // ---------- 用户主页 ----------
 function closeProfile() {
@@ -834,7 +1076,7 @@ document.getElementById("profile-overlay").addEventListener("click", e => {
   if (e.target.id === "profile-overlay") closeProfile();
 });
 
-if (token) enter().catch(() => logout());
+if (token) enter().then(redeemPendingInvite).catch(() => logout());
 </script>
 </body>
 </html>

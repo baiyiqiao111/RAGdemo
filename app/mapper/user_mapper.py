@@ -45,6 +45,11 @@ class UserMapper:
         stmt = select(User.id).where(User.email == email, User.id != exclude_user_id).limit(1)
         return self.db.execute(stmt).scalar() is not None
 
+    def select_admin_ids(self) -> List[int]:
+        """查询全部系统管理员的 id（role=admin），他们可以审批任意知识库/文档的权限申请。"""
+        stmt = select(User.id).where(User.role == "admin")
+        return list(self.db.execute(stmt).scalars().all())
+
     def count(self) -> int:
         """统计用户总数。"""
         stmt = select(func.count(User.id))

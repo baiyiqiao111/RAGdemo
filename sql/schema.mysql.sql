@@ -86,3 +86,44 @@ CREATE TABLE permissions (
     CONSTRAINT fk_permissions_user    FOREIGN KEY (user_id)    REFERENCES users (id),
     CONSTRAINT fk_permissions_inviter FOREIGN KEY (inviter_id) REFERENCES users (id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '权限表';
+
+-- ------------------------------------------------------------
+-- 系统通知表（目前用于权限申请的待办提醒，点进去可直接审批）
+-- ------------------------------------------------------------
+CREATE TABLE notifications (
+    id            BIGINT      NOT NULL AUTO_INCREMENT,
+    user_id       BIGINT      NOT NULL                 COMMENT '接收通知的用户',
+    permission_id BIGINT      NULL                     COMMENT '关联的权限申请，用于点进去直接审批',
+    target_type   VARCHAR(16) NULL                     COMMENT 'knowledge_base / document，冗余自权限申请',
+    target_id     BIGINT      NULL                     COMMENT '知识库或文档 id，冗余自权限申请',
+    title         VARCHAR(255) NOT NULL                COMMENT '通知标题',
+    content       TEXT        NULL                     COMMENT '通知内容',
+    is_read       TINYINT(1)  NOT NULL DEFAULT 0        COMMENT '是否已读',
+    created_at    DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY ix_notifications_user (user_id, is_read),
+    CONSTRAINT fk_notifications_user       FOREIGN KEY (user_id)       REFERENCES users (id),
+    CONSTRAINT fk_notifications_permission FOREIGN KEY (permission_id) REFERENCES permissions (id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '系统通知表';
+
+-- ------------------------------------------------------------
+-- 邀请链接表（分享链接，供单个用户点开自动获得指定权限，兑换一次后即失效；
+-- permission_id 绑定兑换时生成的那条权限记录，为空表示尚未被使用）
+-- ------------------------------------------------------------
+CREATE TABLE invite_links (
+    id              BIGINT      NOT NULL AUTO_INCREMENT,
+    token           VARCHAR(43) NOT NULL                 COMMENT '邀请令牌，拼在邀请链接里',
+    target_type     VARCHAR(16) NOT NULL                 COMMENT 'knowledge_base / document',
+    target_id       BIGINT      NOT NULL                 COMMENT '知识库或文档 id',
+    permission_type VARCHAR(16) NOT NULL                 COMMENT 'read / write / admin',
+    created_by      BIGINT      NOT NULL                 COMMENT '创建者',
+    permission_id   BIGINT      NULL                     COMMENT '兑换后绑定的权限记录，NULL 表示尚未被使用',
+    expires_at      DATETIME    NULL                     COMMENT '过期时间，NULL 为永不过期',
+    is_revoked      TINYINT(1)  NOT NULL DEFAULT 0        COMMENT '是否已撤销',
+    created_at      DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_invite_links_token (token),
+    KEY ix_invite_links_target (target_type, target_id),
+    CONSTRAINT fk_invite_links_creator   FOREIGN KEY (created_by)    REFERENCES users (id),
+    CONSTRAINT fk_invite_links_permission FOREIGN KEY (permission_id) REFERENCES permissions (id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '邀请链接表';

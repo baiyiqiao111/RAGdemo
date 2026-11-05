@@ -15,7 +15,7 @@ class PermissionApplyDTO(BaseModel):
 
 class PermissionInviteDTO(BaseModel):
     """直接邀请某用户获得权限请求体；发起人须已对该 target 拥有管理权限，提交后直接「已通过」。"""
-    user_id: int
+    username: str
     permission_type: PermissionType
     target_type: TargetType
     target_id: int

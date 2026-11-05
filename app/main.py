@@ -12,7 +12,9 @@ from .controller import (
     auth_controller,
     document_controller,
     file_controller,
+    invite_link_controller,
     knowledge_base_controller,
+    notification_controller,
     permission_controller,
 )
 
@@ -28,6 +30,8 @@ app.include_router(knowledge_base_controller.router)
 app.include_router(document_controller.router)
 app.include_router(file_controller.router)
 app.include_router(permission_controller.router)
+app.include_router(notification_controller.router)
+app.include_router(invite_link_controller.router)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 

@@ -21,3 +21,10 @@ class PermissionVO(BaseModel):
     inviter_id: Optional[int]
     user: Optional[UserBriefVO] = None
     inviter: Optional[UserBriefVO] = None
+
+
+class AccessLevelVO(BaseModel):
+    """当前用户对某 target 的有效权限（供前端判断按钮的显示/隐藏）。"""
+    read: bool
+    write: bool
+    admin: bool
