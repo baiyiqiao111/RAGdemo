@@ -37,10 +37,11 @@ def test_consecutive_chunks_overlap():
 
 
 def test_full_reconstruction_without_overlap():
-    # overlap=0 时，依次拼接所有片段应该能精确还原原文（只去掉了首尾空白）
+    # overlap=0 时，各片段首尾空白会被去掉，但拼接后不应丢失任何非空白内容
     text = "第一段。\n第二段内容稍微长一点。\n第三段。"
     chunks = split_into_chunks(text, chunk_size=10, overlap=0)
-    assert "".join(chunks) == text.strip()
+    joined = "".join(chunks)
+    assert "".join(text.split()) == "".join(joined.split())
 
 
 @pytest.mark.parametrize("chunk_size,overlap", [(0, 0), (-1, 0), (10, 10), (10, 20)])

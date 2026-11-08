@@ -127,3 +127,22 @@ CREATE TABLE invite_links (
     CONSTRAINT fk_invite_links_creator   FOREIGN KEY (created_by)    REFERENCES users (id),
     CONSTRAINT fk_invite_links_permission FOREIGN KEY (permission_id) REFERENCES permissions (id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '邀请链接表';
+
+-- ------------------------------------------------------------
+-- 文档切片表（RAG 接入第一步：文档正文按长度切分后的片段，供后续向量化/检索使用；
+-- 新建文档时自动生成，暂不含向量/embedding 相关字段）
+-- ------------------------------------------------------------
+CREATE TABLE document_chunks (
+    id                BIGINT   NOT NULL AUTO_INCREMENT,
+    document_id       BIGINT   NOT NULL                 COMMENT '所属文档',
+    knowledge_base_id BIGINT   NOT NULL                 COMMENT '所属知识库，冗余自文档，便于检索时按库过滤',
+    chunk_index       INT      NOT NULL                 COMMENT '在文档内的顺序，从 0 开始',
+    content           LONGTEXT NOT NULL                 COMMENT '切片正文',
+    char_count        INT      NOT NULL                 COMMENT '切片字符数',
+    created_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY ix_document_chunks_document (document_id, chunk_index),
+    KEY ix_document_chunks_kb (knowledge_base_id),
+    CONSTRAINT fk_document_chunks_document FOREIGN KEY (document_id)       REFERENCES documents (id),
+    CONSTRAINT fk_document_chunks_kb       FOREIGN KEY (knowledge_base_id) REFERENCES knowledge_bases (id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '文档切片表';

@@ -7,11 +7,13 @@ from sqlalchemy.orm import Session
 from ..common.exceptions import BadRequestException, ConflictException, NotFoundException
 from ..config.database import get_db
 from ..dto.document_dto import DocumentCreateDTO, DocumentQueryDTO, DocumentUpdateDTO
-from ..entity import Document, User
+from ..entity import Document, DocumentChunk, User
+from ..mapper.document_chunk_mapper import DocumentChunkMapper
 from ..mapper.document_mapper import DocumentMapper
 from ..mapper.user_mapper import UserMapper
 from ..service.access_control import AccessControl
 from ..service.knowledge_base_service import KnowledgeBaseService
+from ..util.chunk_util import split_into_chunks
 from ..util.text_util import content_meta
 from ..vo.document_vo import DocumentBriefVO, DocumentVO
 from ..vo.page_vo import PageVO
@@ -29,13 +31,15 @@ class DocumentService:
         self,
         db: Session = Depends(get_db),
         document_mapper: DocumentMapper = Depends(),
+        document_chunk_mapper: DocumentChunkMapper = Depends(),
         user_mapper: UserMapper = Depends(),
         knowledge_base_service: KnowledgeBaseService = Depends(),
         access_control: AccessControl = Depends(),
     ):
-        """构造器注入数据库会话（用于提交事务）、DocumentMapper、UserMapper、KnowledgeBaseService 和 AccessControl。"""
+        """构造器注入数据库会话（用于提交事务）、各 Mapper、KnowledgeBaseService 和 AccessControl。"""
         self.db = db
         self.document_mapper = document_mapper
+        self.document_chunk_mapper = document_chunk_mapper
         self.user_mapper = user_mapper
         self.knowledge_base_service = knowledge_base_service
         self.access_control = access_control
@@ -91,6 +95,7 @@ class DocumentService:
             updater_id=current.id,
         )
         self.document_mapper.insert(doc)
+        self._create_chunks(doc)
         self.db.commit()
         self.document_mapper.refresh(doc)
         return self._to_vo(doc)
@@ -135,6 +140,21 @@ class DocumentService:
         self.db.commit()
 
     # ========================= 私有方法 =========================
+
+    def _create_chunks(self, doc: Document) -> None:
+        """新建文档时，把正文切分成片段落库，供后续 RAG 向量化/检索使用。"""
+        pieces = split_into_chunks(doc.content)
+        chunks = [
+            DocumentChunk(
+                document_id=doc.id,
+                knowledge_base_id=doc.knowledge_base_id,
+                chunk_index=index,
+                content=piece,
+                char_count=len(piece),
+            )
+            for index, piece in enumerate(pieces)
+        ]
+        self.document_chunk_mapper.insert_many(chunks)
 
     def _get_alive(self, doc_id: int) -> Document:
         """按 id 获取未删除的文档，不存在或已删除时抛 404。"""
