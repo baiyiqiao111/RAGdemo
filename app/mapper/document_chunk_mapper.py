@@ -24,6 +24,14 @@ class DocumentChunkMapper:
         )
         return list(self.db.execute(stmt).scalars().all())
 
+    def select_by_ids(self, ids: Iterable[int]) -> List[DocumentChunk]:
+        """按主键批量查询切片正文（RAG 检索命中向量 id 后，回查真正的切片内容）。"""
+        ids = list(ids)
+        if not ids:
+            return []
+        stmt = select(DocumentChunk).where(DocumentChunk.id.in_(ids))
+        return list(self.db.execute(stmt).scalars().all())
+
     def insert_many(self, chunks: List[DocumentChunk]) -> None:
         """批量新增切片。"""
         if chunks:

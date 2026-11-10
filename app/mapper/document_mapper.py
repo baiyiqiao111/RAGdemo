@@ -20,6 +20,14 @@ class DocumentMapper:
         """按主键查询文档（包含已删除的，由调用方判断 is_deleted）。"""
         return self.db.get(Document, doc_id)
 
+    def select_by_ids(self, ids: Iterable[int]) -> List[Document]:
+        """按主键批量查询文档（如 RAG 检索命中切片后，批量取所属文档标题）。"""
+        ids = list(ids)
+        if not ids:
+            return []
+        stmt = select(Document).where(Document.id.in_(ids))
+        return list(self.db.execute(stmt).scalars().all())
+
     def select_alive_all(self, knowledge_base_id: int) -> List[Document]:
         """查询某知识库下全部未删除文档，按父文档、同级排序、id 排列，用于组装目录树。"""
         stmt = (

@@ -16,6 +16,7 @@ from .controller import (
     knowledge_base_controller,
     notification_controller,
     permission_controller,
+    rag_controller,
 )
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
@@ -32,6 +33,7 @@ app.include_router(file_controller.router)
 app.include_router(permission_controller.router)
 app.include_router(notification_controller.router)
 app.include_router(invite_link_controller.router)
+app.include_router(rag_controller.router)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 

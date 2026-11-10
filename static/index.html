@@ -100,6 +100,18 @@
   .kb-item .kb-meta { font-size: 12px; color: #bfbfbf; margin-top: 2px; }
   #sidebar-header.drag-over { background: #e6f7ef; }
   #sidebar-header .back { border: none; background: none; padding: 0 4px 0 0; color: #8c8c8c; font-size: 16px; }
+  /* 智能问答 */
+  .rag-card { display: flex; flex-direction: column; width: 640px; max-height: 80vh; }
+  .rag-history { flex: 1; overflow: auto; margin: 12px 0; padding-right: 4px; }
+  .rag-qa { margin-bottom: 18px; }
+  .rag-question { font-weight: 600; font-size: 14px; padding: 8px 12px; background: #f0f5ff; border-radius: 8px; display: inline-block; }
+  .rag-answer { margin-top: 8px; font-size: 14px; line-height: 1.7; padding: 10px 12px; background: #f6f8fa; border-radius: 8px; white-space: pre-wrap; }
+  .rag-answer.loading { color: #8c8c8c; }
+  .rag-sources { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .rag-source-tag { font-size: 12px; padding: 3px 10px; background: #fff; border: 1px solid #d9d9d9; border-radius: 12px; cursor: pointer; color: #595959; }
+  .rag-source-tag:hover { border-color: #00b96b; color: #00b96b; }
+  .rag-input-row { display: flex; gap: 8px; border-top: 1px solid #f0f0f0; padding-top: 12px; }
+  .rag-input-row textarea { flex: 1; resize: none; height: 44px; font: inherit; }
   /* 系统通知 */
   #notif-entry { position: fixed; top: 12px; right: 64px; z-index: 50; width: 36px; height: 36px; border-radius: 50%; background: #fff; border: 1px solid #d9d9d9; display: flex; align-items: center; justify-content: center; font-size: 17px; cursor: pointer; user-select: none; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
   #notif-badge { position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; padding: 0 3px; border-radius: 8px; background: #ff4d4f; color: #fff; font-size: 11px; line-height: 16px; text-align: center; }
@@ -144,6 +156,7 @@
 <div id="kb-overlay" class="modal-overlay hidden"></div>
 <div id="permission-overlay" class="modal-overlay hidden"></div>
 <div id="invite-link-overlay" class="modal-overlay hidden"></div>
+<div id="rag-overlay" class="modal-overlay hidden"></div>
 
 <div id="toast" class="hidden"></div>
 
@@ -261,6 +274,7 @@ async function openKnowledgeBase(kbId) {
     <strong style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(currentKb.title)}">${esc(currentKb.title)}</strong>
     <button onclick="openPermissionModal('knowledge_base', currentKb.id, currentKb.title)">权限</button>
     ${currentKbAccess.admin ? `<button onclick="openInviteLinkModal('knowledge_base', currentKb.id, currentKb.title)">邀请链接</button>` : ""}
+    <button onclick="openRagModal()">智能问答</button>
     ${currentKbAccess.admin ? '<button class="primary" onclick="newDoc(null)">+ 新建</button>' : ""}`;
   const header = document.getElementById("sidebar-header");
   header.title = "拖拽文档到此处移到顶层";
@@ -931,6 +945,90 @@ async function redeemPendingInvite() {
 }
 document.getElementById("invite-link-overlay").addEventListener("click", e => {
   if (e.target.id === "invite-link-overlay") closeInviteLinkModal();
+});
+
+// ---------- 智能问答 ----------
+let ragHistory = []; // 当前会话里的问答记录（仅前端展示用，不会作为多轮上下文传给大模型）：{ question, answer, sources, loading, error }
+
+function openRagModal() {
+  ragHistory = [];
+  renderRagModal();
+  document.getElementById("rag-overlay").classList.remove("hidden");
+}
+function closeRagModal() {
+  document.getElementById("rag-overlay").classList.add("hidden");
+}
+function renderRagModal() {
+  document.getElementById("rag-overlay").innerHTML = `
+    <div class="modal-card rag-card">
+      <h3>智能问答 · ${esc(currentKb.title)}</h3>
+      <div class="rag-history" id="rag-history"></div>
+      <div class="rag-input-row">
+        <textarea id="rag-question" placeholder="基于这个知识库里的文档提问，按 Enter 发送，Shift+Enter 换行"></textarea>
+        <button class="primary" onclick="submitRagQuestion()">提问</button>
+      </div>
+      <div class="actions"><button onclick="closeRagModal()">关闭</button></div>
+    </div>`;
+  renderRagHistory();
+  document.getElementById("rag-question").addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitRagQuestion(); }
+  });
+  document.getElementById("rag-question").focus();
+}
+function renderRagHistory() {
+  const box = document.getElementById("rag-history");
+  if (!box) return;
+  box.innerHTML = ragHistory.length ? ragHistory.map(renderRagQa).join("") : '<div style="color:#bfbfbf;text-align:center;padding:24px 0">还没有提问，在下面输入你的问题吧</div>';
+  box.scrollTop = box.scrollHeight;
+}
+function renderRagQa(qa) {
+  const answerHtml = qa.loading
+    ? '<div class="rag-answer loading">正在检索知识库并生成回答...</div>'
+    : `<div class="rag-answer${qa.error ? " loading" : ""}">${esc(qa.answer)}</div>`;
+  const sourcesHtml = !qa.loading && qa.sources && qa.sources.length
+    ? `<div class="rag-sources">${qa.sources.map(s => `
+        <span class="rag-source-tag" title="${esc(s.content.slice(0, 120))}" onclick="openRagSource(${s.document_id})">
+          ${esc(s.document_title)} · ${(s.score * 100).toFixed(0)}%
+        </span>`).join("")}</div>`
+    : "";
+  return `
+    <div class="rag-qa">
+      <div class="rag-question">${esc(qa.question)}</div>
+      ${answerHtml}
+      ${sourcesHtml}
+    </div>`;
+}
+async function submitRagQuestion() {
+  const input = document.getElementById("rag-question");
+  const question = input.value.trim();
+  if (!question) return;
+  input.value = "";
+
+  const qa = { question, answer: "", sources: [], loading: true, error: false };
+  ragHistory.push(qa);
+  renderRagHistory();
+
+  try {
+    const result = await api("/api/rag/ask", {
+      method: "POST",
+      body: { knowledge_base_id: currentKb.id, question },
+    });
+    qa.answer = result.answer;
+    qa.sources = result.sources;
+  } catch (e) {
+    qa.answer = e.message;
+    qa.error = true;
+  } finally {
+    qa.loading = false;
+    renderRagHistory();
+  }
+}
+async function openRagSource(documentId) {
+  closeRagModal();
+  await openDoc(documentId);
+}
+document.getElementById("rag-overlay").addEventListener("click", e => {
+  if (e.target.id === "rag-overlay") closeRagModal();
 });
 
 // ---------- 系统通知 ----------
