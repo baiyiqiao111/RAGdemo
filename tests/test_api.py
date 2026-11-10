@@ -4,6 +4,8 @@ import tempfile
 # 测试使用独立的临时数据库，必须在导入 app 之前设置
 _db_file = os.path.join(tempfile.mkdtemp(), "test.db")
 os.environ["KB_DATABASE_URL"] = "sqlite:///" + _db_file.replace("\\", "/")
+# 建文档会触发向量化写入 Milvus Lite，同样要指向临时文件，避免污染项目目录下的 milvus_rag_kb.db
+os.environ["KB_MILVUS_URI"] = os.path.join(tempfile.mkdtemp(), "test_milvus.db")
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

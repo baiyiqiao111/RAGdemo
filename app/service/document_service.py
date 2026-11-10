@@ -13,6 +13,7 @@ from ..mapper.document_mapper import DocumentMapper
 from ..mapper.user_mapper import UserMapper
 from ..service.access_control import AccessControl
 from ..service.knowledge_base_service import KnowledgeBaseService
+from ..service.vector_index_service import VectorIndexService
 from ..util.chunk_util import split_into_chunks
 from ..util.text_util import content_meta
 from ..vo.document_vo import DocumentBriefVO, DocumentVO
@@ -35,14 +36,16 @@ class DocumentService:
         user_mapper: UserMapper = Depends(),
         knowledge_base_service: KnowledgeBaseService = Depends(),
         access_control: AccessControl = Depends(),
+        vector_index_service: VectorIndexService = Depends(),
     ):
-        """构造器注入数据库会话（用于提交事务）、各 Mapper、KnowledgeBaseService 和 AccessControl。"""
+        """构造器注入数据库会话（用于提交事务）、各 Mapper、KnowledgeBaseService、AccessControl 和 VectorIndexService。"""
         self.db = db
         self.document_mapper = document_mapper
         self.document_chunk_mapper = document_chunk_mapper
         self.user_mapper = user_mapper
         self.knowledge_base_service = knowledge_base_service
         self.access_control = access_control
+        self.vector_index_service = vector_index_service
 
     # ========================= 查询 =========================
 
@@ -95,7 +98,8 @@ class DocumentService:
             updater_id=current.id,
         )
         self.document_mapper.insert(doc)
-        self._create_chunks(doc)
+        chunks = self._create_chunks(doc)
+        self.vector_index_service.index_chunks(chunks)
         self.db.commit()
         self.document_mapper.refresh(doc)
         return self._to_vo(doc)
@@ -142,8 +146,8 @@ class DocumentService:
 
     # ========================= 私有方法 =========================
 
-    def _create_chunks(self, doc: Document) -> None:
-        """新建文档时，把正文切分成片段落库，供后续 RAG 向量化/检索使用。"""
+    def _create_chunks(self, doc: Document) -> List[DocumentChunk]:
+        """新建文档时，把正文切分成片段落库；返回落库后的切片（已有 id，供向量化使用）。"""
         pieces = split_into_chunks(doc.content)
         chunks = [
             DocumentChunk(
@@ -156,6 +160,7 @@ class DocumentService:
             for index, piece in enumerate(pieces)
         ]
         self.document_chunk_mapper.insert_many(chunks)
+        return chunks
 
     def _get_alive(self, doc_id: int) -> Document:
         """按 id 获取未删除的文档，不存在或已删除时抛 404。"""
