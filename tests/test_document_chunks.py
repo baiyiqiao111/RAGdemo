@@ -76,3 +76,46 @@ def test_empty_document_has_no_chunks():
     ).json()
 
     assert _chunks_for(doc["id"]) == []
+
+
+def test_deleting_document_removes_its_chunks_async():
+    """删除文档（含子文档）后台异步清理切片：TestClient 内会同步跑完后台任务，删除接口返回后切片应已清空。"""
+    admin = _auth("chunkadmin4")
+    kb = client.post("/api/knowledge-bases", headers=admin, json={"title": "删除切片知识库"}).json()
+    parent = client.post(
+        "/api/documents", headers=admin, json={"title": "父文档", "content": "父文档内容", "knowledge_base_id": kb["id"]},
+    ).json()
+    child = client.post(
+        "/api/documents", headers=admin,
+        json={"title": "子文档", "content": "子文档内容", "parent_id": parent["id"], "knowledge_base_id": kb["id"]},
+    ).json()
+    assert _chunks_for(parent["id"]) != []
+    assert _chunks_for(child["id"]) != []
+
+    r = client.delete(f"/api/documents/{parent['id']}", headers=admin)
+    assert r.status_code == 204
+
+    assert _chunks_for(parent["id"]) == []
+    assert _chunks_for(child["id"]) == []  # 子文档一起被软删除，切片也一起清理
+
+
+def test_deleting_knowledge_base_removes_all_its_chunks_async():
+    """删除知识库后台异步清理库内所有文档的切片。"""
+    admin = _auth("chunkadmin5")
+    kb = client.post("/api/knowledge-bases", headers=admin, json={"title": "删除知识库切片测试"}).json()
+    doc1 = client.post(
+        "/api/documents", headers=admin, json={"title": "文档一", "content": "文档一内容", "knowledge_base_id": kb["id"]},
+    ).json()
+    doc2 = client.post(
+        "/api/documents", headers=admin, json={"title": "文档二", "content": "文档二内容", "knowledge_base_id": kb["id"]},
+    ).json()
+    assert _chunks_for(doc1["id"]) != []
+    assert _chunks_for(doc2["id"]) != []
+
+    r = client.delete(f"/api/knowledge-bases/{kb['id']}", headers=admin)
+    assert r.status_code == 204
+
+    assert _chunks_for(doc1["id"]) == []
+    assert _chunks_for(doc2["id"]) == []
+    assert client.get(f"/api/knowledge-bases/{kb['id']}", headers=admin).status_code == 404
+    assert client.get(f"/api/documents/{doc1['id']}", headers=admin).status_code == 404

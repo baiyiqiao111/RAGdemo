@@ -4,7 +4,7 @@ from fastapi import Depends
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from ..config.database import get_db
+from ..config.database import SessionLocal, get_db
 from ..entity import DocumentChunk
 
 
@@ -35,3 +35,33 @@ class DocumentChunkMapper:
         ids = list(document_ids)
         if ids:
             self.db.execute(delete(DocumentChunk).where(DocumentChunk.document_id.in_(ids)))
+
+    def delete_by_knowledge_base_id(self, knowledge_base_id: int) -> None:
+        """知识库被删除时，清理库内全部文档的切片（按知识库 id 直接删，不用逐个枚举文档）。"""
+        self.db.execute(delete(DocumentChunk).where(DocumentChunk.knowledge_base_id == knowledge_base_id))
+
+
+def delete_chunks_by_document_ids_async(document_ids: Iterable[int]) -> None:
+    """后台任务：异步删除这些文档的切片。
+
+    用独立的数据库会话（而非请求里那个，响应返回后就关闭了），供 BackgroundTasks 调用。
+    """
+    ids = list(document_ids)
+    if not ids:
+        return
+    db = SessionLocal()
+    try:
+        DocumentChunkMapper(db).delete_by_document_ids(ids)
+        db.commit()
+    finally:
+        db.close()
+
+
+def delete_chunks_by_knowledge_base_id_async(knowledge_base_id: int) -> None:
+    """后台任务：异步删除某知识库下全部文档的切片，用独立的数据库会话，供 BackgroundTasks 调用。"""
+    db = SessionLocal()
+    try:
+        DocumentChunkMapper(db).delete_by_knowledge_base_id(knowledge_base_id)
+        db.commit()
+    finally:
+        db.close()

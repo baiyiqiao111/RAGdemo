@@ -1,14 +1,14 @@
 from datetime import datetime
 from typing import List, Optional, Set
 
-from fastapi import Depends
+from fastapi import BackgroundTasks, Depends
 from sqlalchemy.orm import Session
 
 from ..common.exceptions import BadRequestException, ConflictException, NotFoundException
 from ..config.database import get_db
 from ..dto.document_dto import DocumentCreateDTO, DocumentQueryDTO, DocumentUpdateDTO
 from ..entity import Document, DocumentChunk, User
-from ..mapper.document_chunk_mapper import DocumentChunkMapper
+from ..mapper.document_chunk_mapper import DocumentChunkMapper, delete_chunks_by_document_ids_async
 from ..mapper.document_mapper import DocumentMapper
 from ..mapper.user_mapper import UserMapper
 from ..service.access_control import AccessControl
@@ -129,8 +129,8 @@ class DocumentService:
         self.document_mapper.refresh(doc)
         return self._to_vo(doc)
 
-    def delete(self, doc_id: int, current: User) -> None:
-        """软删除文档及其全部子文档，需要管理权限（可来自文档本身或所属知识库）。"""
+    def delete(self, doc_id: int, current: User, background_tasks: BackgroundTasks) -> None:
+        """软删除文档及其全部子文档，需要管理权限（可来自文档本身或所属知识库）；切片在后台异步清理。"""
         doc = self._get_alive(doc_id)
         self.access_control.require_access(current, "admin", "document", doc_id, doc.knowledge_base_id)
 
@@ -138,6 +138,7 @@ class DocumentService:
         ids = self._descendant_ids(doc.id) | {doc.id}
         self.document_mapper.soft_delete_by_ids(ids, datetime.now())
         self.db.commit()
+        background_tasks.add_task(delete_chunks_by_document_ids_async, ids)
 
     # ========================= 私有方法 =========================
 

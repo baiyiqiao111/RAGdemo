@@ -1,34 +1,39 @@
+from datetime import datetime
 from typing import List
 
-from fastapi import Depends
+from fastapi import BackgroundTasks, Depends
 from sqlalchemy.orm import Session
 
 from ..common.exceptions import NotFoundException
 from ..config.database import get_db
 from ..dto.knowledge_base_dto import KnowledgeBaseCreateDTO
 from ..entity import KnowledgeBase, User
+from ..mapper.document_chunk_mapper import delete_chunks_by_knowledge_base_id_async
+from ..mapper.document_mapper import DocumentMapper
 from ..mapper.knowledge_base_mapper import KnowledgeBaseMapper
 from ..service.access_control import AccessControl
 from ..vo.knowledge_base_vo import KnowledgeBaseVO
 
 
 class KnowledgeBaseService:
-    """知识库相关业务：文档的顶层归属容器。"""
+    """知识库相关业务：文档的顶层归属容器，支持软删除（级联文档，切片在后台异步清理）。"""
 
     def __init__(
         self,
         db: Session = Depends(get_db),
         knowledge_base_mapper: KnowledgeBaseMapper = Depends(),
+        document_mapper: DocumentMapper = Depends(),
         access_control: AccessControl = Depends(),
     ):
-        """构造器注入数据库会话（用于提交事务）、KnowledgeBaseMapper 和 AccessControl。"""
+        """构造器注入数据库会话（用于提交事务）、各 Mapper 和 AccessControl。"""
         self.db = db
         self.knowledge_base_mapper = knowledge_base_mapper
+        self.document_mapper = document_mapper
         self.access_control = access_control
 
     def list_all(self, current: User) -> List[KnowledgeBaseVO]:
         """返回当前用户有读权限的知识库，按创建时间倒序；系统管理员可看到全部。"""
-        kbs = self.knowledge_base_mapper.select_all()
+        kbs = self.knowledge_base_mapper.select_alive_all()
         if current.role != "admin":
             kbs = [kb for kb in kbs if self.access_control.has_access(current, "read", "knowledge_base", kb.id)]
         return [KnowledgeBaseVO.model_validate(kb) for kb in kbs]
@@ -47,9 +52,20 @@ class KnowledgeBaseService:
         self.access_control.require_access(current, "read", "knowledge_base", kb_id)
         return KnowledgeBaseVO.model_validate(kb)
 
+    def delete(self, kb_id: int, current: User, background_tasks: BackgroundTasks) -> None:
+        """软删除知识库，需要管理权限；级联软删除库内全部文档；库内全部切片在后台异步清理。"""
+        self.get_alive(kb_id)
+        self.access_control.require_access(current, "admin", "knowledge_base", kb_id)
+
+        now = datetime.now()
+        self.document_mapper.soft_delete_by_knowledge_base_id(kb_id, now)
+        self.knowledge_base_mapper.soft_delete(kb_id, now)
+        self.db.commit()
+        background_tasks.add_task(delete_chunks_by_knowledge_base_id_async, kb_id)
+
     def get_alive(self, kb_id: int) -> KnowledgeBase:
-        """按 id 获取知识库实体，不存在抛 404；仅做存在性校验，不含权限判断。"""
+        """按 id 获取未删除的知识库实体，不存在或已删除时抛 404；仅做存在性校验，不含权限判断。"""
         kb = self.knowledge_base_mapper.select_by_id(kb_id)
-        if kb is None:
+        if kb is None or kb.is_deleted:
             raise NotFoundException("知识库不存在")
         return kb

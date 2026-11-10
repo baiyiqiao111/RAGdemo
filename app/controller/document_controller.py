@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Response, status
 
 from ..dto.document_dto import DocumentCreateDTO, DocumentQueryDTO, DocumentUpdateDTO
 from ..entity import User
@@ -71,9 +71,10 @@ def update_document(
 @router.delete("/{doc_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_document(
     doc_id: int,
+    background_tasks: BackgroundTasks,
     document_service: DocumentService = Depends(),
     current: User = Depends(get_current_user),
 ):
-    """软删除文档及其全部子文档，需要管理权限。"""
-    document_service.delete(doc_id, current)
+    """软删除文档及其全部子文档，需要管理权限；切片异步清理。"""
+    document_service.delete(doc_id, current, background_tasks)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

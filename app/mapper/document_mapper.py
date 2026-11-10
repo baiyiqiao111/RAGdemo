@@ -87,6 +87,15 @@ class DocumentMapper:
         )
         return result.rowcount
 
+    def soft_delete_by_knowledge_base_id(self, knowledge_base_id: int, deleted_at: datetime) -> int:
+        """知识库被删除时，级联软删除库内全部文档，返回受影响行数。"""
+        result = self.db.execute(
+            update(Document)
+            .where(Document.knowledge_base_id == knowledge_base_id, Document.is_deleted.is_(False))
+            .values(is_deleted=True, deleted_at=deleted_at)
+        )
+        return result.rowcount
+
     def refresh(self, doc: Document) -> None:
         """从数据库重新加载实体，拿到 UPDATE 语句写入的最新值。"""
         self.db.refresh(doc)

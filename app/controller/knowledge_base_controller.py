@@ -1,6 +1,6 @@
 from typing import List
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Response, status
 
 from ..dto.knowledge_base_dto import KnowledgeBaseCreateDTO
 from ..entity import User
@@ -38,3 +38,15 @@ def get_knowledge_base(
 ):
     """获取知识库详情，需要读权限。"""
     return knowledge_base_service.detail(kb_id, current)
+
+
+@router.delete("/{kb_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_knowledge_base(
+    kb_id: int,
+    background_tasks: BackgroundTasks,
+    knowledge_base_service: KnowledgeBaseService = Depends(),
+    current: User = Depends(get_current_user),
+):
+    """软删除知识库，连带库内所有文档一并软删除，需要管理权限；库内全部切片异步清理。"""
+    knowledge_base_service.delete(kb_id, current, background_tasks)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
